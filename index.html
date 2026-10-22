@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>ゼロから8小節</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<!-- body のクラスで「分割／タブ」「説明／作曲」を切り替える -->
+<body class="mode-split show-daw">
+
+  <!-- 上のバー -->
+  <header class="topbar">
+    <h1>ゼロから8小節</h1>
+    <div class="spacer"></div>
+    <span class="label">表示</span>
+    <div class="switch">
+      <button id="btn-tab">タブ</button>
+      <button id="btn-split">分割</button>
+    </div>
+  </header>
+
+  <!-- タブ（タブ表示のときだけ見える） -->
+  <nav class="tabs">
+    <button id="tab-explain">説明</button>
+    <button id="tab-daw">作曲</button>
+  </nav>
+
+  <main class="workspace">
+    <!-- 説明パネル -->
+    <section id="explain" class="panel explain">
+      <div class="explain-head">
+        <p class="step-no" id="step-no"></p>
+        <div class="spacer"></div>
+        <button id="toc-btn" class="toc-btn">目次</button>
+        <button id="glossary-btn" class="toc-btn">用語</button>
+        <button id="chart-btn" class="toc-btn">早見表</button>
+        <button id="qol-btn" class="toc-btn">QOL</button>
+      </div>
+      <!-- 目次・用語・本文（中身は lessons.js と glossary.js から main.js が作る） -->
+      <div id="toc" class="toc" hidden></div>
+      <div id="glossary" class="toc" hidden></div>
+      <div id="chart" class="toc" hidden></div>
+      <div id="qol" class="toc lesson" hidden></div>
+      <article id="lesson" class="lesson"></article>
+      <div class="nav-buttons">
+        <button id="prev">← 前へ</button>
+        <button id="next" class="primary">次へ →</button>
+      </div>
+    </section>
+
+    <!-- DAWパネル -->
+    <section id="daw" class="panel daw">
+      <div class="toolbar">
+        <button id="play" class="play" aria-label="再生">▶</button>
+        <button id="stop" aria-label="停止">■</button>
+        <label>BPM <input id="bpm" type="number" min="40" max="240" value="120"></label>
+        <label>グリッド
+          <select id="grid">
+            <option value="12">4分</option>
+            <option value="6">8分</option>
+            <option value="4">12分（8分三連）</option>
+            <option value="3" selected>16分</option>
+            <option value="2">24分（16分三連）</option>
+            <option value="1">48分</option>
+          </select>
+        </label>
+        <label>スケール
+          <select id="scale">
+            <option value="C">Cメジャー</option>
+            <option value="G">Gメジャー</option>
+          </select>
+        </label>
+        <label>コードを光らせる
+          <select id="hl"></select>
+        </label>
+        <button id="clear">このトラックを消す</button>
+      </div>
+
+      <div class="daw-body">
+        <!-- トラック一覧（中身は main.js が作る） -->
+        <div id="tracks" class="tracks"></div>
+        <!-- ピアノロール -->
+        <div class="roll-wrap">
+          <canvas id="roll"></canvas>
+        </div>
+      </div>
+
+      <p class="hint">
+        クリック：置く／消す　ドラッグ：移動　右端をドラッグ：長さ　スペース：再生／停止　Ctrl＋Z：元に戻す　──　ほかの操作は説明パネルの「QOL」にまとめてあります
+      </p>
+    </section>
+  </main>
+
+  <!-- 用語の説明（マウスを乗せると出る） -->
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+
+  <!-- 説明の文章：lesson(...) を呼ぶたびに1ステップ増える -->
+  <!-- 用語辞典：term(...) を呼ぶたびに1語増える -->
+  <script>
+    const LESSON_SOURCES = [];
+    function lesson(text) { LESSON_SOURCES.push(text); }
+    const GLOSSARY = [];
+    function term(names, text) { GLOSSARY.push({ names: names.split("|").map((s) => s.trim()), text: text }); }
+    const QOL_SOURCES = [];
+    function qol(text) { QOL_SOURCES.push(text); }
+  </script>
+  <script src="lessons.js"></script>
+  <script src="glossary.js"></script>
+  <script src="qol.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>
