@@ -1159,7 +1159,7 @@ function drawRoll() {
     ctx.fillRect(KEY_W, pitchToY(p), W - KEY_W, ROW_H - 1);
   }
 
-  // コードの音の行を光らせる（ルート音は少し濃く）
+  // コードの音の行を光らせる（ルート音は黄色、ほかの音は緑）
   if (state.highlight) {
     for (let bar = 0; bar < 8; bar++) {
       const hl = highlightForBar(bar);
@@ -1172,7 +1172,7 @@ function drawRoll() {
         if (p < BOTTOM) break;
         const pc = p % 12;
         if (!hl.pcs.has(pc)) continue;
-        ctx.fillStyle = pc === hl.root ? "rgba(92, 200, 120, 0.42)" : "rgba(92, 200, 120, 0.24)";
+        ctx.fillStyle = pc === hl.root ? "rgba(240, 200, 60, 0.5)" : "rgba(92, 200, 120, 0.24)";   // ルート音は黄色、ほかは緑
         ctx.fillRect(x1, pitchToY(p), x2 - x1, ROW_H - 1);
       }
     }
@@ -1232,7 +1232,7 @@ function drawRoll() {
     // 1つのコードを光らせているときは、鍵盤の右はしにも緑の印を付ける
     const keyHl = state.highlight && state.highlight !== "track" ? highlightForBar(0) : null;
     if (keyHl && keyHl.pcs.has(pc)) {
-      ctx.fillStyle = pc === keyHl.root ? "#2f9e57" : "#7fcf98";
+      ctx.fillStyle = pc === keyHl.root ? "#f0c83c" : "#7fcf98";
       ctx.fillRect(KEY_W - 7, y + 2, 5, ROW_H - 5);
     }
   }
