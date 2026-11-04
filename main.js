@@ -5,8 +5,7 @@ const state = {
   mode: "split",   // "split"（分割）か "tab"（タブ）
   tab: "daw",      // タブ表示のとき見せる方："explain" か "daw"
   step: 0,         // 今のステップ番号
-  panel: "lesson", // 説明パネルに出すもの："lesson"（本文）／"toc"（目次）／"glossary"（用語）／"chart"（早見表）／"qol"（便利な機能）／"genre"（ジャンル別）
-  genre: 0,        // ジャンル別のページで、今見ているジャンルの番号
+  panel: "lesson", // 説明パネルに出すもの："lesson"（本文）／"toc"（目次）／"glossary"（用語）／"chart"（早見表）／"qol"（便利な機能）
   chartBass: true, // 早見表で、ベース音も一緒に鳴らす・入れるか
   highlight: "",   // ピアノロールで光らせるコード（"" なし／"track" コードトラックに合わせる／"C" などのコード名）
   answers: {},     // クイズの答え："ステップ番号-クイズ番号" → 選んだ選択肢の番号
@@ -759,8 +758,6 @@ function renderExplain() {
   $("chart").hidden = state.panel !== "chart";
   $("qol-btn").classList.toggle("active", state.panel === "qol");
   $("qol").hidden = state.panel !== "qol";
-  $("genre-btn").classList.toggle("active", state.panel === "genre");
-  $("genre").hidden = state.panel !== "genre";
   $("toc").hidden = state.panel !== "toc";
   $("glossary").hidden = state.panel !== "glossary";
   $("lesson").hidden = state.panel !== "lesson";
@@ -771,20 +768,6 @@ function renderExplain() {
   } else if (state.panel === "glossary") {
     $("glossary").innerHTML = glossaryHtml();
     linkTerms($("glossary"));
-  } else if (state.panel === "genre") {
-    const box = $("genre");
-    const scroll = box.scrollTop;
-    const g = GENRES[state.genre] || GENRES[0];
-    let html = "";
-    if (GENRES.length > 1) {   // ジャンルが2つ以上あるときは、上に切り替えボタンを出す
-      html += '<div class="genre-tabs">' + GENRES.map((x, i) =>
-        '<button class="genre-tab' + (i === state.genre ? " active" : "") + '" data-genre="' + i + '">' + inline(x.title) + "</button>").join("") + "</div>";
-    }
-    html += g ? "<h2>" + inline(g.title) + "</h2>" + g.html : "<p>genre.js にジャンルがまだありません。</p>";
-    box.innerHTML = html;
-    if (g) box.querySelectorAll(".quiz").forEach((el) => { el.innerHTML = quizHtml("g" + state.genre, Number(el.dataset.quiz), g); });
-    linkTerms(box);
-    box.scrollTop = scroll;
   } else if (state.panel === "qol") {
     const box = $("qol");
     const scroll = box.scrollTop;
@@ -908,7 +891,6 @@ $("lesson").addEventListener("scroll", hideTip);
 $("glossary").addEventListener("scroll", hideTip);
 $("chart").addEventListener("scroll", hideTip);
 $("qol").addEventListener("scroll", hideTip);
-$("genre").addEventListener("scroll", hideTip);
 
 // ---------- 早見表（コードの構成音・定番のコード進行） ----------
 const EN_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -1046,8 +1028,6 @@ const steps = LESSON_SOURCES.map((src, i) => parseLesson(src, i));
 let order = computeOrder();   // 表示する順番（steps の番号の並び）。コード先・メロ先などで変わる
 // QOL（便利な機能）のページ：qol.js に書いた文章を、説明と同じ書き方で読み込む
 const QOL_PAGE = parseLesson(QOL_SOURCES.join("\n"), "qol");
-// ジャンル別の作り方：genre.js の genre(...) 1つが1ジャンル
-const GENRES = GENRE_SOURCES.map((src, i) => parseLesson(src, "g" + i));
 
 // ================================================
 // 5. 描画（データを見て画面を全部作り直す）
@@ -1306,16 +1286,6 @@ $("toc-btn").addEventListener("click", () => { state.panel = state.panel === "to
 $("glossary-btn").addEventListener("click", () => { state.panel = state.panel === "glossary" ? "lesson" : "glossary"; renderExplain(); });
 $("chart-btn").addEventListener("click", () => { state.panel = state.panel === "chart" ? "lesson" : "chart"; renderExplain(); });
 $("qol-btn").addEventListener("click", () => { state.panel = state.panel === "qol" ? "lesson" : "qol"; renderExplain(); });
-$("genre-btn").addEventListener("click", () => { state.panel = state.panel === "genre" ? "lesson" : "genre"; renderExplain(); });
-// ジャンルの切り替えボタン
-$("genre").addEventListener("click", (e) => {
-  const b = e.target.closest(".genre-tab");
-  if (!b) return;
-  state.genre = Number(b.dataset.genre);
-  stopSound();
-  renderExplain();
-  $("genre").scrollTop = 0;
-});
 
 // 早見表の中の操作
 $("chart").addEventListener("change", (e) => {
@@ -1366,7 +1336,6 @@ function onQuizClick(e) {
   renderExplain();
 }
 $("lesson").addEventListener("click", onQuizClick);
-$("genre").addEventListener("click", onQuizClick);   // ジャンル別のページのクイズ
 
 $("grid").addEventListener("change", (e) => {
   state.grid = Number(e.target.value);

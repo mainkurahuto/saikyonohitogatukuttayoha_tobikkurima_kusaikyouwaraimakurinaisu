@@ -35,14 +35,12 @@
         <button id="glossary-btn" class="toc-btn">用語</button>
         <button id="chart-btn" class="toc-btn">早見表</button>
         <button id="qol-btn" class="toc-btn">QOL</button>
-        <button id="genre-btn" class="toc-btn">ジャンル</button>
       </div>
       <!-- 目次・用語・本文（中身は lessons.js と glossary.js から main.js が作る） -->
       <div id="toc" class="toc" hidden></div>
       <div id="glossary" class="toc" hidden></div>
       <div id="chart" class="toc" hidden></div>
       <div id="qol" class="toc lesson" hidden></div>
-      <div id="genre" class="toc lesson" hidden></div>
       <article id="lesson" class="lesson"></article>
       <div class="nav-buttons">
         <button id="prev">← 前へ</button>
@@ -105,13 +103,10 @@
     function term(names, text) { GLOSSARY.push({ names: names.split("|").map((s) => s.trim()), text: text }); }
     const QOL_SOURCES = [];
     function qol(text) { QOL_SOURCES.push(text); }
-    const GENRE_SOURCES = [];
-    function genre(text) { GENRE_SOURCES.push(text); }
   </script>
   <script src="lessons.js"></script>
   <script src="glossary.js"></script>
   <script src="qol.js"></script>
-  <script src="genre.js"></script>
   <script src="main.js"></script>
 </body>
 </html>
