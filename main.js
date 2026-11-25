@@ -17,13 +17,19 @@ const state = {
   playing: false,
   current: 0,      // 今編集しているトラックの番号
   tracks: [
-    // notes の中身：{ pitch, start, length, velocity }
-    // instrument：音色（INSTRUMENTS のキー）
-    { name: "メロディ", color: "#f2a541", mute: false, solo: false, instrument: "piano", notes: [] },
-    { name: "コード",   color: "#7aa7e8", mute: false, solo: false, instrument: "piano", notes: [] }
+    // notes の中身：{ pitch, start, length, velocity }（ドラムトラックの pitch は、パッドの番号 0〜15）
+    // type：トラックの種類。"inst"（楽器）か "drum"（ドラム）
+    // instrument：音色（INSTRUMENTS のキー）　volume：音量（0〜100）
+    // fixed：最初からあるトラック（消せない。説明や早見表がこの2つを使うため）
+    { name: "メロディ", type: "inst", color: "#f2a541", mute: false, solo: false, volume: 80, instrument: "piano", notes: [], fixed: true },
+    { name: "コード",   type: "inst", color: "#7aa7e8", mute: false, solo: false, volume: 80, instrument: "piano", notes: [], fixed: true }
   ],
+  pad: 0,               // ドラムのパッド画面で選んでいるパッドの番号
   selected: new Set()   // 選択中の音（編集中のトラックの音そのもの）
 };
+
+const MAX_TRACKS = 8;
+const TRACK_COLORS = ["#e86f6f", "#9ad06a", "#c48be8", "#5fd0c8", "#e8c547", "#e89a5f"];
 
 let clipboard = { notes: [], length: 0 };   // コピーした音（位置は先頭からの距離で持つ）
 const history = { undo: [], redo: [] };     // 元に戻す・やり直し用の記録
@@ -43,7 +49,7 @@ const NAMES = ["ド", "ド♯", "レ", "レ♯", "ミ", "ファ", "ファ♯", "
 
 const TOP = 96, BOTTOM = 36;   // 音域（MIDI番号）：C7 〜 C2
 const ROW_H = 20;              // 1行の高さ(px)
-const KEY_W = 64;              // 左の鍵盤の幅(px)
+const KEY_W = 80;              // 左の鍵盤の幅(px)。ドラムのときはパッドの名前が入る
 const RULER_H = 24;            // 上の小節番号の高さ(px)
 const BAR = 48;                // 1小節 = 48
 const TOTAL = BAR * 8;         // 8小節 = 384
@@ -76,7 +82,28 @@ function initAudio() {
   master = audio.createGain();
   master.gain.value = 0.35;
   master.connect(audio.destination);
+  DRUM_BUFFERS = DRUM_PADS.map((pad) => makeBuffer(pad.dur, pad.gen));   // ドラムの音を作っておく
 }
+
+// ---------- トラックごとの音量 ----------
+// トラック1つにつき1つ、音量のつまみ（GainNode）を作り、全部の音をそこに通してから master へ
+const buses = new WeakMap();
+const volToGain = (v) => v / 80;   // 音量 80 で、そのままの大きさ
+function busFor(track) {
+  let b = buses.get(track);
+  if (!b) {
+    b = audio.createGain();
+    b.gain.value = volToGain(track.volume);
+    b.connect(master);
+    buses.set(track, b);
+  }
+  return b;
+}
+function setVolume(track, v) {
+  track.volume = v;
+  if (audio && buses.has(track)) buses.get(track).gain.setTargetAtTime(volToGain(v), audio.currentTime, 0.02);
+}
+const isDrum = (track) => track && track.type === "drum";
 
 const unitSec = () => 60 / state.bpm / 12;          // 48分1つぶんの秒数（1拍 = 12）
 const midiToFreq = (p) => 440 * Math.pow(2, (p - 69) / 12);
@@ -111,7 +138,8 @@ function findInstrument(name) {
 // 1音を time 秒に予約する
 // durSec を渡すと、BPMに関係なくその秒数だけ鳴らす（説明の中の ▶ ボタン用）
 // inst：音色の名前（INSTRUMENTS のキー）。書かなければピアノ
-function playNote(pitch, lengthUnits, velocity, time, durSec, inst) {
+// out：音の出口（トラックの音量のつまみ）。書かなければ全体の音量へ直接
+function playNote(pitch, lengthUnits, velocity, time, durSec, inst, out) {
   const ins = INSTRUMENTS[inst] || INSTRUMENTS.piano;
   const dur = Math.max(ins.attack + 0.01, durSec !== undefined ? durSec : lengthUnits * unitSec());
   const peak = 0.5 * (velocity / 127) * ins.gain;
@@ -122,7 +150,7 @@ function playNote(pitch, lengthUnits, velocity, time, durSec, inst) {
   g.gain.linearRampToValueAtTime(peak, time + ins.attack);                           // 立ち上がり
   g.gain.setTargetAtTime(peak * ins.sustain, time + ins.attack, ins.decay / 3);      // だんだん弱く
   g.gain.setTargetAtTime(0, time + dur, ins.release / 3);                            // 離したら消える
-  g.connect(master);
+  g.connect(out || master);
 
   // 高い音を削るフィルター
   let input = g;
@@ -157,11 +185,133 @@ function playNote(pitch, lengthUnits, velocity, time, durSec, inst) {
   player.voices.push({ g, oscs, end });
 }
 
+// ================================================
+// ドラム（パッドサンプラー）
+// ================================================
+// パッド16個の音は、ファイルを読み込まずに、ここで計算して作る（著作権の心配がない）
+// gen(t, i, sr)：t 秒目の音の大きさ（-1〜1）を返す。dur：音の長さ（秒）
+// 作った音は「サンプル」として AudioBuffer にしまい、パッドを押すとそれを鳴らす（サンプラーのしくみ）
+const noise = () => Math.random() * 2 - 1;
+const sq = (f, t) => (Math.sin(2 * Math.PI * f * t) >= 0 ? 1 : -1);          // 矩形波
+const METAL = [205.3, 304.4, 369.6, 522.7, 540, 800];                          // シンバルの金属っぽさを作る高さ
+const metal = (t, k) => METAL.reduce((s, f) => s + sq(f * k, t), 0) / METAL.length;
+
+// 音の高さが下がっていくサイン波（キック・タム用）。位相は呼ぶ側で足していく
+function sweep(state, t, f0, f1, time, sr) {
+  const f = f1 + (f0 - f1) * Math.exp(-t / time);
+  state.ph += (2 * Math.PI * f) / sr;
+  return Math.sin(state.ph);
+}
+
+// 高い音だけ通す・低い音だけ通す（1段のかんたんなフィルター）
+function highpass(data, cutoff, sr) {
+  const a = Math.exp((-2 * Math.PI * cutoff) / sr);
+  let prevIn = 0, prevOut = 0;
+  for (let i = 0; i < data.length; i++) {
+    const out = a * (prevOut + data[i] - prevIn);
+    prevIn = data[i];
+    prevOut = out;
+    data[i] = out;
+  }
+}
+function lowpass(data, cutoff, sr) {
+  const a = Math.exp((-2 * Math.PI * cutoff) / sr);
+  let acc = 0;
+  for (let i = 0; i < data.length; i++) { acc = (1 - a) * data[i] + a * acc; data[i] = acc; }
+}
+
+const DRUM_PADS = [
+  { name: "キック", dur: 0.45, gen: (s) => (t, i, sr) => Math.tanh(1.6 * sweep(s, t, 160, 48, 0.03, sr) * Math.exp(-t / 0.13)) + (t < 0.002 ? noise() * 0.3 : 0) },
+  { name: "スネア", dur: 0.3, hp: 1200, gen: (s) => (t, i, sr) => Math.sin(2 * Math.PI * 185 * t) * Math.exp(-t / 0.04) * 0.6 + noise() * Math.exp(-t / 0.08) },
+  { name: "クラップ", dur: 0.35, hp: 900, lp: 3500, gen: () => (t) => {
+      const burst = [0, 0.011, 0.022].reduce((s, b) => s + (t >= b ? Math.exp(-(t - b) / 0.005) : 0), 0);
+      return noise() * (burst * 0.8 + (t >= 0.025 ? Math.exp(-(t - 0.025) / 0.09) : 0));
+    } },
+  { name: "HH閉", dur: 0.09, hp: 7000, gen: () => (t) => (noise() * 0.7 + metal(t, 1.7) * 0.5) * Math.exp(-t / 0.022) },
+  { name: "HH開", dur: 0.5, hp: 6500, gen: () => (t) => (noise() * 0.7 + metal(t, 1.7) * 0.5) * Math.exp(-t / 0.2) },
+  { name: "クラッシュ", dur: 2.0, hp: 4000, gen: () => (t) => (noise() * 0.8 + metal(t, 2.3) * 0.4) * Math.exp(-t / 0.65) * Math.min(1, t / 0.003) },
+  { name: "ライド", dur: 1.4, hp: 3000, gen: () => (t) => (metal(t, 3.1) * 0.7 + noise() * 0.15 + Math.sin(2 * Math.PI * 3200 * t) * 0.2) * Math.exp(-t / 0.45) },
+  { name: "タム低", dur: 0.6, gen: (s) => (t, i, sr) => sweep(s, t, 140, 82, 0.08, sr) * Math.exp(-t / 0.22) },
+  { name: "タム中", dur: 0.5, gen: (s) => (t, i, sr) => sweep(s, t, 200, 120, 0.07, sr) * Math.exp(-t / 0.18) },
+  { name: "タム高", dur: 0.45, gen: (s) => (t, i, sr) => sweep(s, t, 280, 175, 0.06, sr) * Math.exp(-t / 0.15) },
+  { name: "リム", dur: 0.08, hp: 400, gen: () => (t) => (Math.sin(2 * Math.PI * 1700 * t) * 0.6 + Math.sin(2 * Math.PI * 520 * t) * 0.5 + noise() * 0.3) * Math.exp(-t / 0.012) },
+  { name: "カウベル", dur: 0.4, hp: 350, lp: 5000, gen: () => (t) => (sq(540, t) + sq(800, t)) * 0.5 * (t < 0.01 ? 1 : Math.exp(-(t - 0.01) / 0.09)) },
+  { name: "シェイカー", dur: 0.14, hp: 5000, gen: () => (t) => noise() * (t < 0.025 ? t / 0.025 : Math.exp(-(t - 0.025) / 0.03)) },
+  { name: "タンバリン", dur: 0.35, hp: 6000, gen: () => (t) => noise() * (Math.exp(-t / 0.12) * (0.6 + 0.4 * Math.abs(Math.sin(2 * Math.PI * 38 * t)))) },
+  { name: "スナップ", dur: 0.15, hp: 1500, gen: () => (t) => (noise() * 0.8 + Math.sin(2 * Math.PI * 2100 * t) * 0.4) * Math.exp(-t / 0.016) },
+  { name: "808キック", dur: 1.3, gen: (s) => (t, i, sr) => Math.tanh(1.3 * sweep(s, t, 120, 46, 0.05, sr) * Math.exp(-t / 0.55)) }
+];
+let DRUM_BUFFERS = null;   // 作ったパッドの音（AudioBuffer）。最初に音を鳴らすときに作る
+
+// 1つのパッドの音を作る：計算 → フィルター → 大きさをそろえる
+function makeBuffer(dur, gen) {
+  const sr = audio.sampleRate;
+  const buf = audio.createBuffer(1, Math.ceil(dur * sr), sr);
+  const data = buf.getChannelData(0);
+  const pad = DRUM_PADS.find((p) => p.gen === gen);
+  const f = gen({ ph: 0 });
+  for (let i = 0; i < data.length; i++) data[i] = f(i / sr, i, sr);
+  if (pad && pad.hp) highpass(data, pad.hp, sr);
+  if (pad && pad.lp) lowpass(data, pad.lp, sr);
+  let peak = 0;
+  for (let i = 0; i < data.length; i++) peak = Math.max(peak, Math.abs(data[i]));
+  const k = peak > 0 ? 0.9 / peak : 1;
+  const fade = Math.min(data.length, Math.round(0.01 * sr));   // 最後をなめらかに消す（プツッとならないように）
+  for (let i = 0; i < data.length; i++) {
+    data[i] *= k;
+    if (i >= data.length - fade) data[i] *= (data.length - i) / fade;
+  }
+  return buf;
+}
+
+// そのトラックのパッドの音（自分で読み込んだ音があればそちら）
+const padBuffer = (track, pad) => (track.custom && track.custom[pad] ? track.custom[pad].buffer : DRUM_BUFFERS[pad]);
+const padName = (track, pad) => (track.custom && track.custom[pad] ? track.custom[pad].name : DRUM_PADS[pad].name);
+
+// パッドを1回鳴らす
+function playDrum(track, pad, velocity, time) {
+  const buf = padBuffer(track, pad);
+  if (!buf) return;
+  const src = audio.createBufferSource();
+  src.buffer = buf;
+  const g = audio.createGain();
+  g.gain.value = 0.9 * (velocity / 127);
+  src.connect(g).connect(busFor(track));
+  src.start(time);
+  player.voices.push({ g, oscs: [src], end: time + buf.duration });
+}
+
+// リズムの型（1小節分）。[パッドの番号, 位置（48分単位）] の並び。1拍 = 12、8分 = 6、16分 = 3
+const BEATS = [];
+for (let b = 0; b < 4; b++) BEATS.push(b * 12);
+const DRUM_PATTERNS = [
+  { name: "四つ打ち", hits: [...BEATS.map((t) => [0, t]), [2, 12], [2, 36], ...BEATS.map((t) => [4, t + 6])] },
+  { name: "8ビート", hits: [[0, 0], [0, 24], [0, 30], [1, 12], [1, 36], ...[0, 6, 12, 18, 24, 30, 36, 42].map((t) => [3, t])] },
+  { name: "16ビート", hits: [[0, 0], [0, 18], [0, 24], [1, 12], [1, 36], ...Array.from({ length: 16 }, (_, k) => [3, k * 3])] },
+  { name: "ハーフタイム", hits: [[0, 0], [0, 30], [1, 24], ...[0, 6, 12, 18, 24, 30, 36, 42].map((t) => [3, t])] }
+];
+
+// 型を、編集中のドラムトラックの8小節全部に入れる（今ある音は置きかえる。Ctrl＋Z で戻せる）
+function insertDrumPattern(k) {
+  const track = state.tracks[state.current];
+  if (!isDrum(track)) return;
+  pushHistory();
+  const notes = [];
+  for (let bar = 0; bar < 8; bar++) {
+    for (const [pad, t] of DRUM_PATTERNS[k].hits) notes.push({ pitch: pad, start: bar * BAR + t, length: 3, velocity: pad === 3 || pad === 4 ? 80 : 110 });
+  }
+  track.notes = notes;
+  state.selected.clear();
+  render();
+}
+
 // 音を置いたり動かしたりしたとき、その高さを、編集中のトラックの音色で短く鳴らして確かめる
 function preview(pitch) {
   initAudio();
   audio.resume();
-  playNote(pitch, 6, 100, audio.currentTime, undefined, state.tracks[state.current].instrument);
+  const track = state.tracks[state.current];
+  if (isDrum(track)) playDrum(track, pitch, 110, audio.currentTime);
+  else playNote(pitch, 6, 100, audio.currentTime, undefined, track.instrument, busFor(track));
 }
 
 // 少し先（0.1秒ぶん）までの音を予約しておく。25ミリ秒ごとに呼ばれる
@@ -177,7 +327,9 @@ function schedule() {
     for (const track of state.tracks) {
       if (!isAudible(track)) continue;
       for (const n of track.notes) {
-        if (n.start === player.nextUnit) playNote(n.pitch, n.length, n.velocity, t, undefined, track.instrument);
+        if (n.start !== player.nextUnit) continue;
+        if (isDrum(track)) playDrum(track, n.pitch, n.velocity, t);
+        else playNote(n.pitch, n.length, n.velocity, t, undefined, track.instrument, busFor(track));
       }
     }
     player.nextUnit++;
@@ -241,8 +393,47 @@ function pushHistory() {
 }
 
 function restore(text) {
-  JSON.parse(text).forEach((notes, i) => { state.tracks[i].notes = notes; });
+  JSON.parse(text).forEach((notes, i) => { if (state.tracks[i]) state.tracks[i].notes = notes; });
   state.selected.clear();   // 中身が作り直されるので選択は外す
+}
+
+// ---------- トラックを増やす・消す・名前を変える ----------
+// トラックの数が変わると「元に戻す」の記録と合わなくなるので、記録は消す
+function addTrack(type) {
+  if (state.tracks.length >= MAX_TRACKS) return;
+  const used = state.tracks.map((t) => t.color);
+  const color = TRACK_COLORS.find((c) => !used.includes(c)) || TRACK_COLORS[0];
+  const base = type === "drum" ? "ドラム" : "楽器";
+  let name = base, k = 2;
+  while (state.tracks.some((t) => t.name === name)) name = base + (k++);
+  state.tracks.push({ name, type, color, mute: false, solo: false, volume: 80, instrument: "piano", notes: [], custom: {} });
+  history.undo = [];
+  history.redo = [];
+  selectTrack(state.tracks.length - 1);
+}
+
+function removeTrack(i) {
+  const t = state.tracks[i];
+  if (!t || t.fixed) return;
+  if (t.notes.length > 0 && !confirm("「" + t.name + "」を消しますか？ 中の音も全部消えます。")) return;
+  if (audio && buses.has(t)) buses.get(t).disconnect();
+  state.tracks.splice(i, 1);
+  history.undo = [];
+  history.redo = [];
+  selectTrack(Math.min(state.current, state.tracks.length - 1));
+}
+
+// 編集するトラックを変える。楽器 ⇔ ドラムで行の並びが変わるので、縦のスクロール位置はそれぞれ覚えておく
+function selectTrack(i) {
+  const before = isDrum(state.tracks[state.current]);
+  if (state.current !== i) state.selected.clear();   // 選択は編集中のトラックの音だけ
+  state.current = i;
+  const after = isDrum(state.tracks[i]);
+  if (before !== after) {
+    view[before ? "yDrum" : "yInst"] = view.y;
+    view.y = view[after ? "yDrum" : "yInst"] || 0;
+  }
+  render();
 }
 
 function undo() {
@@ -288,9 +479,11 @@ function paste() {
   if (at >= TOTAL) return;
   pushHistory();
   state.selected.clear();
+  const [lo, hi] = pitchRange();
   for (const c of clipboard.notes) {
     const start = at + c.start;
     if (start >= TOTAL) continue;   // 8小節からはみ出す音は捨てる
+    if (c.pitch < lo || c.pitch > hi) continue;   // 楽器 ⇔ ドラムで、行がない音も捨てる
     const n = { pitch: c.pitch, start: start, length: Math.min(c.length, TOTAL - start), velocity: c.velocity };
     currentNotes().push(n);
     state.selected.add(n);           // 貼り付けた音を選択しておく（そのまま動かせる）
@@ -1042,9 +1235,12 @@ function render() {
   $("play").classList.toggle("active", state.playing);
 
   renderTracks();
+  renderPads();
   renderHlSelect();
   drawRoll();
 }
+
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 // トラック一覧を作り直す
 function renderTracks() {
@@ -1053,23 +1249,62 @@ function renderTracks() {
     const cls = ["track"];
     if (i === state.current) cls.push("selected");
     if (!isAudible(t)) cls.push("silent");
-    // 音色の選択欄
-    let options = "";
-    for (const key in INSTRUMENTS) {
-      options += '<option value="' + key + '"' + (key === t.instrument ? " selected" : "") + ">" + INSTRUMENTS[key].name + "</option>";
+    const name = esc(t.name);
+    // 楽器トラックは音色の選択欄、ドラムトラックは「ドラム」の印
+    let kind;
+    if (isDrum(t)) {
+      kind = '<p class="kind">ドラム（パッド16個）</p>';
+    } else {
+      let options = "";
+      for (const key in INSTRUMENTS) {
+        options += '<option value="' + key + '"' + (key === t.instrument ? " selected" : "") + ">" + INSTRUMENTS[key].name + "</option>";
+      }
+      kind = '<select class="inst" data-action="inst" aria-label="' + name + 'の音色">' + options + "</select>";
     }
     html +=
       '<div class="' + cls.join(" ") + '" data-index="' + i + '">' +
         '<div class="track-row">' +
           '<span class="dot" style="background:' + t.color + '"></span>' +
-          '<button class="name" data-action="select">' + t.name + '</button>' +
-          '<button class="ms' + (t.mute ? " mute-on" : "") + '" data-action="mute" aria-label="' + t.name + 'をミュート" aria-pressed="' + t.mute + '">M</button>' +
-          '<button class="ms' + (t.solo ? " solo-on" : "") + '" data-action="solo" aria-label="' + t.name + 'だけ再生" aria-pressed="' + t.solo + '">S</button>' +
-        '</div>' +
-        '<select class="inst" data-action="inst" aria-label="' + t.name + 'の音色">' + options + '</select>' +
-      '</div>';
+          '<button class="name" data-action="select" title="ダブルクリックで名前を変える">' + name + "</button>" +
+          '<button class="ms' + (t.mute ? " mute-on" : "") + '" data-action="mute" aria-label="' + name + 'をミュート" aria-pressed="' + t.mute + '">M</button>' +
+          '<button class="ms' + (t.solo ? " solo-on" : "") + '" data-action="solo" aria-label="' + name + 'だけ再生" aria-pressed="' + t.solo + '">S</button>' +
+          (t.fixed ? "" : '<button class="ms del" data-action="remove" aria-label="' + name + 'を消す">×</button>') +
+        "</div>" +
+        kind +
+        '<label class="vol"><span>音量</span><input type="range" class="vol-range" min="0" max="100" value="' + t.volume + '" aria-label="' + name + 'の音量"><output>' + t.volume + "</output></label>" +
+      "</div>";
   });
   $("tracks").innerHTML = html;
+  const full = state.tracks.length >= MAX_TRACKS;
+  $("add-inst").disabled = full;
+  $("add-drum").disabled = full;
+}
+
+let lastPattern = 0;   // 最後に選んだリズムの型
+
+// ドラムトラックを編集しているときだけ、パッド16個とリズムの型を出す
+function renderPads() {
+  const track = state.tracks[state.current];
+  const box = $("pads");
+  box.hidden = !isDrum(track);
+  if (box.hidden) return;
+  let html = '<p class="pads-title">パッド<span>クリックで鳴る</span></p><div class="pad-grid">';
+  DRUM_PADS.forEach((p, i) => {
+    const custom = track.custom && track.custom[i];
+    html += '<button class="pad' + (i === state.pad ? " selected" : "") + (custom ? " custom" : "") + '" data-pad="' + i + '" title="' + esc(padName(track, i)) + '">' + esc(padName(track, i)) + "</button>";
+  });
+  html += "</div>";
+  const custom = track.custom && track.custom[state.pad];
+  html +=
+    '<div class="pad-load">' +
+      '<p>選んだパッド：<b>' + esc(padName(track, state.pad)) + "</b></p>" +
+      '<button data-action="load">自分の音を読み込む</button>' +
+      (custom ? '<button data-action="reset">元の音に戻す</button>' : "") +
+    "</div>" +
+    '<div class="pad-pattern"><select id="pattern" aria-label="リズムの型">' +
+      DRUM_PATTERNS.map((p, k) => '<option value="' + k + '"' + (k === lastPattern ? " selected" : "") + ">" + p.name + "</option>").join("") +
+    '</select><button data-action="pattern">型を入れる</button></div>';
+  box.innerHTML = html;
 }
 
 // 画質対策：canvas の中身の画素数を「見た目の大きさ × 画面の細かさ」にそろえる
@@ -1101,15 +1336,22 @@ function clampView() {
   view.unitW = Math.min(MAX_UNIT_W, Math.max(minUnitW(), view.unitW));
   const maxX = TOTAL - (W - KEY_W) / view.unitW;
   view.x = Math.min(Math.max(0, maxX), Math.max(0, view.x));
-  const maxY = (TOP - BOTTOM + 1) * ROW_H - (H - RULER_H);
+  const maxY = rowCount() * ROW_H - (H - RULER_H);
   view.y = Math.min(Math.max(0, maxY), Math.max(0, view.y));
 }
 
+// 行の並び：楽器トラックは上が高い音（C7 〜 C2）、ドラムトラックは上からパッド 0〜15
+const drumView = () => isDrum(state.tracks[state.current]);
+const rowCount = () => (drumView() ? DRUM_PADS.length : TOP - BOTTOM + 1);
+const pitchRange = () => (drumView() ? [0, DRUM_PADS.length - 1] : [BOTTOM, TOP]);
+const rowToPitch = (row) => (drumView() ? row : TOP - row);
+const pitchToRow = (p) => (drumView() ? p : TOP - p);
+
 // 時間・音の高さ ⇔ 画面の位置
 const timeToX = (t) => KEY_W + (t - view.x) * view.unitW;
-const pitchToY = (p) => RULER_H + (TOP - p) * ROW_H - view.y;
+const pitchToY = (p) => RULER_H + pitchToRow(p) * ROW_H - view.y;
 const unitAt = (x) => view.x + (x - KEY_W) / view.unitW;
-const pitchAt = (y) => TOP - Math.floor((y - RULER_H + view.y) / ROW_H);
+const pitchAt = (y) => rowToPitch(Math.floor((y - RULER_H + view.y) / ROW_H));
 const snapFloor = (u) => Math.floor(u / state.grid) * state.grid;   // 左のグリッド線に合わせる
 const snapRound = (u) => Math.round(u / state.grid) * state.grid;   // 近い方のグリッド線に合わせる
 
@@ -1128,7 +1370,7 @@ function drawNotes(track, alpha, isCurrent) {
       ctx.lineWidth = 2;
       ctx.stroke();
     }
-    if (w > 30 && isCurrent) {
+    if (w > 30 && isCurrent && !isDrum(track)) {
       ctx.fillStyle = "#1a1408";
       ctx.fillText(NAMES[n.pitch % 12], x + 4, y + 13);
     }
@@ -1149,19 +1391,25 @@ function drawRoll() {
   ctx.rect(KEY_W, RULER_H, W - KEY_W, H - RULER_H);
   ctx.clip();
 
-  // 行：白鍵は少し明るく、スケールの音は青っぽく
-  for (let row = firstRow; row <= lastRow; row++) {
-    const p = TOP - row;
-    if (p < BOTTOM) break;
-    const pc = p % 12;
-    const black = BLACK.includes(pc);
-    const inScale = scale.includes(pc);
-    ctx.fillStyle = inScale ? (black ? "#262c38" : "#313949") : (black ? "#1f2024" : "#2a2c31");
+  const drums = drumView();
+  const rows = rowCount();
+
+  // 行：白鍵は少し明るく、スケールの音は青っぽく（ドラムは1行おきに色を変えるだけ）
+  for (let row = firstRow; row <= lastRow && row < rows; row++) {
+    const p = rowToPitch(row);
+    if (drums) {
+      ctx.fillStyle = row % 2 ? "#26282d" : "#2c2e34";
+    } else {
+      const pc = p % 12;
+      const black = BLACK.includes(pc);
+      const inScale = scale.includes(pc);
+      ctx.fillStyle = inScale ? (black ? "#262c38" : "#313949") : (black ? "#1f2024" : "#2a2c31");
+    }
     ctx.fillRect(KEY_W, pitchToY(p), W - KEY_W, ROW_H - 1);
   }
 
-  // コードの音の行を光らせる（ルート音は黄色、ほかの音は緑）
-  if (state.highlight) {
+  // コードの音の行を光らせる（ルート音は黄色、ほかの音は緑）。ドラムのときは光らせない
+  if (state.highlight && !drums) {
     for (let bar = 0; bar < 8; bar++) {
       const hl = highlightForBar(bar);
       if (!hl) continue;
@@ -1191,9 +1439,9 @@ function drawRoll() {
     ctx.fillRect(Math.round(timeToX(t)), RULER_H, 1, H - RULER_H);
   }
 
-  // 音：ほかのトラックは薄く、編集中のトラックははっきり
+  // 音：ほかのトラックは薄く、編集中のトラックははっきり（楽器とドラムは行の並びが違うので、同じ種類だけ重ねる）
   ctx.font = "11px sans-serif";
-  state.tracks.forEach((t, i) => { if (i !== state.current) drawNotes(t, 0.3, false); });
+  state.tracks.forEach((t, i) => { if (i !== state.current && isDrum(t) === drums) drawNotes(t, 0.3, false); });
   drawNotes(state.tracks[state.current], 1, true);
 
   // 範囲選択の四角
@@ -1219,7 +1467,18 @@ function drawRoll() {
   ctx.beginPath();
   ctx.rect(0, RULER_H, KEY_W, H - RULER_H);
   ctx.clip();
-  for (let row = firstRow; row <= lastRow; row++) {
+  // ドラム：パッドの名前を並べる
+  if (drums) {
+    const track = state.tracks[state.current];
+    for (let row = firstRow; row <= lastRow && row < rows; row++) {
+      const y = pitchToY(row);
+      ctx.fillStyle = row === state.pad ? "#f2a541" : "#d9d9de";
+      ctx.fillRect(0, y, KEY_W - 1, ROW_H - 1);
+      ctx.fillStyle = "#1d1d1f";
+      ctx.fillText(padName(track, row).slice(0, 7), 6, y + 14);
+    }
+  }
+  for (let row = firstRow; row <= lastRow && !drums; row++) {
     const p = TOP - row;
     if (p < BOTTOM) break;
     const pc = p % 12;
@@ -1382,17 +1641,35 @@ $("tracks").addEventListener("click", (e) => {
   if (!btn || !item) return;
   const i = Number(item.dataset.index);
   const t = state.tracks[i];
-  if (btn.dataset.action === "mute") t.mute = !t.mute;
-  if (btn.dataset.action === "solo") t.solo = !t.solo;
-  if (btn.dataset.action === "select" && state.current !== i) {
-    state.current = i;
-    state.selected.clear();   // 選択は編集中のトラックの音だけ
+  const action = btn.dataset.action;
+  if (action === "remove") { removeTrack(i); return; }
+  if (action === "select") {
+    // 2回続けて押したら名前を変える（1回目で一覧が作り直されるので、dblclick ではなく回数で見る）
+    if (e.detail === 2) {
+      const name = prompt("トラックの名前", t.name);
+      if (name && name.trim()) t.name = name.trim().slice(0, 12);
+      render();
+    } else {
+      selectTrack(i);
+    }
+    return;
   }
+  if (action === "mute") t.mute = !t.mute;
+  if (action === "solo") t.solo = !t.solo;
   render();
+});
+
+// 音量のつまみ：動かしている間は作り直さず、数字と音量だけ変える
+$("tracks").addEventListener("input", (e) => {
+  if (!e.target.classList.contains("vol-range")) return;
+  const t = state.tracks[Number(e.target.closest(".track").dataset.index)];
+  setVolume(t, Number(e.target.value));
+  e.target.nextElementSibling.textContent = e.target.value;
 });
 
 // 音色を変えたら、その音色で試しに鳴らす（メロディは1音、コードは和音）
 $("tracks").addEventListener("change", (e) => {
+  if (e.target.classList.contains("vol-range")) { e.target.blur(); return; }
   if (!e.target.classList.contains("inst")) return;
   const i = Number(e.target.closest(".track").dataset.index);
   const t = state.tracks[i];
@@ -1401,9 +1678,52 @@ $("tracks").addEventListener("change", (e) => {
   audio.resume();
   const now = audio.currentTime + 0.02;
   const pitches = i === 0 ? [72] : [60, 64, 67];
-  for (const p of pitches) playNote(p, 0, 100, now, 0.6, t.instrument);
+  for (const p of pitches) playNote(p, 0, 100, now, 0.6, t.instrument, busFor(t));
   e.target.blur();   // スペースキーで再生できるように、選択欄から外す
   render();
+});
+
+$("add-inst").addEventListener("click", () => addTrack("inst"));
+$("add-drum").addEventListener("click", () => addTrack("drum"));
+
+// ---------- パッド ----------
+// パッドを押す：鳴らして、そのパッドを選ぶ（ピアノロールの行も光る）
+$("pads").addEventListener("click", (e) => {
+  const track = state.tracks[state.current];
+  const pad = e.target.closest(".pad");
+  if (pad) {
+    state.pad = Number(pad.dataset.pad);
+    preview(state.pad);
+    render();
+    return;
+  }
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  if (btn.dataset.action === "load") $("pad-file").click();
+  if (btn.dataset.action === "reset") { delete track.custom[state.pad]; preview(state.pad); render(); }
+  if (btn.dataset.action === "pattern") insertDrumPattern(lastPattern);
+});
+$("pads").addEventListener("change", (e) => {
+  if (e.target.id === "pattern") { lastPattern = Number(e.target.value); e.target.blur(); }
+});
+
+// 自分の音（wav・mp3 など）を、選んだパッドに読み込む
+$("pad-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";   // 同じファイルをもう一度選んでも読み込めるように
+  if (!file) return;
+  const track = state.tracks[state.current];
+  if (!isDrum(track)) return;
+  initAudio();
+  try {
+    const buffer = await audio.decodeAudioData(await file.arrayBuffer());
+    if (!track.custom) track.custom = {};
+    track.custom[state.pad] = { buffer, name: file.name.replace(/\.[^.]+$/, "") };
+    preview(state.pad);
+    render();
+  } catch (err) {
+    alert("この音声ファイルは読み込めませんでした。wav か mp3 を選んでください。");
+  }
 });
 
 // キーボード操作
@@ -1469,7 +1789,16 @@ canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
 canvas.addEventListener("pointerdown", (e) => {
   const { x, y } = posFromEvent(e);
-  if (x < KEY_W || y < RULER_H) return;   // 鍵盤と小節番号の上は無視
+  if (y < RULER_H) return;                // 小節番号の上は無視
+  if (x < KEY_W) {                        // 鍵盤（ドラムはパッドの名前）を押すと、その音を鳴らす
+    const p = pitchAt(y);
+    const [lo, hi] = pitchRange();
+    if (e.button === 0 && p >= lo && p <= hi) {
+      preview(p);
+      if (drumView()) { state.pad = p; renderPads(); drawRoll(); }
+    }
+    return;
+  }
   canvas.setPointerCapture(e.pointerId);  // canvas の外に出てもドラッグを追いかける
 
   // 右ボタン：範囲選択を始める
@@ -1500,7 +1829,8 @@ canvas.addEventListener("pointerdown", (e) => {
   } else {
     // 空いた所：新しい音を置いて、そのままドラッグで長さを決められるようにする
     const p = pitchAt(y), u = unitAt(x);
-    if (p < BOTTOM || u >= TOTAL) return;
+    const [lo, hi] = pitchRange();
+    if (p < lo || p > hi || u >= TOTAL) return;
     const start = snapFloor(u);
     const note = { pitch: p, start: start, length: Math.min(state.noteLength, TOTAL - start), velocity: 100 };
     currentNotes().push(note);
@@ -1562,8 +1892,9 @@ canvas.addEventListener("pointermove", (e) => {
     const maxEnd = Math.max(...drag.orig.map((o) => o.start + o.length));
     const minPitch = Math.min(...drag.orig.map((o) => o.pitch));
     const maxPitch = Math.max(...drag.orig.map((o) => o.pitch));
+    const [lo, hi] = pitchRange();
     dt = Math.max(-minStart, Math.min(TOTAL - maxEnd, dt));
-    dp = Math.max(BOTTOM - minPitch, Math.min(TOP - maxPitch, dp));
+    dp = Math.max(lo - minPitch, Math.min(hi - maxPitch, dp));
 
     const oldPitch = drag.grab.pitch;
     for (const o of drag.orig) {

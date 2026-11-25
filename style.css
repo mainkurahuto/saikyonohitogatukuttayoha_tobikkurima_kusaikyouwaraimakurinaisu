@@ -272,8 +272,45 @@ kbd {
 
 .daw-body { flex: 1 1 0; min-height: 320px; display: flex; gap: 8px; }
 
+/* 左の列（トラック一覧・トラックを足すボタン・パッド） */
+.side { width: 190px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; padding-right: 2px; }
+
 /* トラック一覧 */
-.tracks { width: 180px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; }
+.tracks { display: flex; flex-direction: column; gap: 4px; }
+.track .kind { margin: 0; padding: 0 4px; font-size: 12px; color: #a1a3aa; }
+.vol { display: flex; align-items: center; gap: 6px; padding: 0 4px; font-size: 12px; color: #a1a3aa; }
+.vol input { flex: 1 1 0; min-width: 0; min-height: 24px; padding: 0; border: none; background: transparent; accent-color: #f2a541; }
+.vol output { width: 24px; text-align: right; color: #e8e8ea; font-variant-numeric: tabular-nums; }
+.track .ms.del { color: #e89a9a; }
+.add-track { display: flex; gap: 4px; }
+.add-track button { flex: 1 1 0; min-height: 32px; padding: 0 6px; font-size: 13px; }
+.add-track button:disabled { opacity: 0.4; cursor: default; }
+
+/* ドラムのパッド */
+.pads { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid #2c2e34; border-radius: 6px; background: #1f2024; }
+.pads[hidden] { display: none; }
+.pads-title { margin: 0; font-size: 13px; font-weight: bold; }
+.pads-title span { margin-left: 6px; font-size: 11px; font-weight: normal; color: #a1a3aa; }
+.pad-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.pad {
+  min-height: 40px;
+  padding: 2px;
+  border-color: #3a3d45;
+  background: #2c2f36;
+  font-size: 10px;
+  line-height: 1.2;
+  overflow: hidden;
+  word-break: break-all;
+}
+.pad:active { background: #f2a541; color: #1a1408; }
+.pad.selected { border: 2px solid #f2a541; }
+.pad.custom { background: #2f3a4a; }
+.pad-load p { margin: 0 0 4px; font-size: 12px; color: #a1a3aa; overflow-wrap: anywhere; }
+.pad-load p b { color: #e8e8ea; }
+.pad-load, .pad-pattern { display: flex; flex-wrap: wrap; gap: 4px; }
+.pad-load p { width: 100%; }
+.pad-load button, .pad-pattern button, .pad-pattern select { min-height: 30px; padding: 0 8px; font-size: 12px; }
+.pad-pattern select { flex: 1 1 0; min-width: 0; }
 .track {
   display: flex;
   flex-direction: column;
@@ -297,7 +334,9 @@ kbd {
   background: transparent;
   text-align: left;
 }
-.track .ms { width: 32px; min-height: 32px; padding: 0; font-family: monospace; }
+.track .ms { width: 28px; min-height: 30px; padding: 0; font-family: monospace; flex-shrink: 0; }
+.track .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.track-row { gap: 4px; }
 .track .ms.mute-on { background: #6b7280; color: #fff; }
 .track .ms.solo-on { background: #e8c547; color: #1a1408; }
 

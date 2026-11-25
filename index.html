@@ -77,8 +77,17 @@
       </div>
 
       <div class="daw-body">
-        <!-- トラック一覧（中身は main.js が作る） -->
-        <div id="tracks" class="tracks"></div>
+        <div class="side">
+          <!-- トラック一覧（中身は main.js が作る） -->
+          <div id="tracks" class="tracks"></div>
+          <div class="add-track">
+            <button id="add-inst">＋ 楽器</button>
+            <button id="add-drum">＋ ドラム</button>
+          </div>
+          <!-- ドラムのパッド（ドラムトラックを選んでいるときだけ出る） -->
+          <div id="pads" class="pads" hidden></div>
+          <input id="pad-file" type="file" accept="audio/*" hidden>
+        </div>
         <!-- ピアノロール -->
         <div class="roll-wrap">
           <canvas id="roll"></canvas>
