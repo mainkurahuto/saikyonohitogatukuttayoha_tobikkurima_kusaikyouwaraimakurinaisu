@@ -1827,6 +1827,14 @@ function drawRoll() {
     ctx.strokeRect(x + 0.5, y + 0.5, w, h);
   }
 
+  // Ctrl で縮める・広げるときは、何倍かを出す
+  if (drag && drag.stretch && mouse) {
+    ctx.fillStyle = "#f2a541";
+    ctx.font = "bold 12px sans-serif";
+    ctx.fillText("×" + drag.stretch.toFixed(2), mouse.x + 12, mouse.y - 8);
+    ctx.font = "11px sans-serif";
+  }
+
   // 再生位置の線
   if (state.playing) {
     ctx.fillStyle = "#ffffff";
@@ -2435,8 +2443,25 @@ canvas.addEventListener("pointermove", (e) => {
       if (Math.abs(x - drag.x0) < 4) return;
       dt = snapRound(unitAt(x)) - origEnd;
     }
-    for (const o of drag.orig) {
-      o.n.length = Math.max(state.grid, Math.min(TOTAL - o.start, o.length + dt));
+    if ((e.ctrlKey || e.metaKey) && !drag.created && drag.orig.length > 1) {
+      // Ctrl を押しながら：選択中の音全体を、横に縮める・広げる（位置も長さも同じ割合で）
+      // 一番左の音の頭を動かない点にして、つかんだ音の終わりがマウスに来るように割合を決める
+      const anchor = Math.min(...drag.orig.map((o) => o.start));
+      const end = Math.max(anchor + 1, snapRound(origEnd + raw));
+      let k = (end - anchor) / (origEnd - anchor);
+      const maxEnd = Math.max(...drag.orig.map((o) => o.start + o.length));
+      k = Math.min(k, (TOTAL - anchor) / (maxEnd - anchor));   // 8小節からはみ出さない
+      for (const o of drag.orig) {
+        o.n.start = anchor + Math.round((o.start - anchor) * k);
+        o.n.length = Math.max(1, Math.round(o.length * k));
+      }
+      drag.stretch = k;
+    } else {
+      for (const o of drag.orig) {
+        o.n.start = o.start;
+        o.n.length = Math.max(state.grid, Math.min(TOTAL - o.start, o.length + dt));
+      }
+      drag.stretch = null;
     }
     state.noteLength = drag.grab.length;   // 次に置く音もこの長さにする
   } else {
