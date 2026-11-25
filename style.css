@@ -346,3 +346,20 @@ kbd {
 
 .hint { margin: 0; font-size: 12px; line-height: 1.7; color: #a1a3aa; }
 #roll { touch-action: none; user-select: none; }
+
+/* パッドに音声ファイルを重ねているとき */
+.pad.drop { background: #f2a541; color: #1a1408; }
+
+/* コードパッド */
+.chord-pad { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
+.chord-pad b { font-family: monospace; font-size: 12px; }
+.chord-pad small { font-family: serif; font-size: 10px; color: #a1a3aa; }
+.check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #c9cad0; cursor: pointer; }
+.check input { width: 16px; height: 16px; min-height: 0; margin: 0; padding: 0; accent-color: #f2a541; }
+.seq { display: flex; flex-wrap: wrap; gap: 4px; min-height: 30px; padding: 4px; border-radius: 6px; background: #16171a; }
+.seq-empty { margin: 0; font-size: 11px; color: #8a8c93; align-self: center; }
+.seq-chip { min-height: 26px; padding: 0 6px; font-family: monospace; font-size: 12px; background: #2f3a4a; }
+.seq-chip span { margin-left: 4px; color: #e89a9a; }
+.rhythm { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: #a1a3aa; }
+.rhythm select { min-height: 30px; padding: 0 6px; font-size: 12px; }
+.pad-load button:disabled { opacity: 0.4; cursor: default; }

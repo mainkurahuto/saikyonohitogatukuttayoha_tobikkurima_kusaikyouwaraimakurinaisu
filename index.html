@@ -64,10 +64,36 @@
             <option value="1">48分</option>
           </select>
         </label>
+        <label>キー
+          <select id="key">
+            <option value="0">C</option>
+            <option value="1">C#</option>
+            <option value="2">D</option>
+            <option value="3">D#</option>
+            <option value="4">E</option>
+            <option value="5">F</option>
+            <option value="6">F#</option>
+            <option value="7">G</option>
+            <option value="8">G#</option>
+            <option value="9">A</option>
+            <option value="10">A#</option>
+            <option value="11">B</option>
+          </select>
+        </label>
         <label>スケール
           <select id="scale">
-            <option value="C">Cメジャー</option>
-            <option value="G">Gメジャー</option>
+            <option value="major">メジャー</option>
+            <option value="minor">マイナー（ナチュラル）</option>
+            <option value="harmonic">ハーモニックマイナー</option>
+            <option value="melodic">メロディックマイナー</option>
+            <option value="dorian">ドリアン</option>
+            <option value="phrygian">フリジアン</option>
+            <option value="lydian">リディアン</option>
+            <option value="mixolydian">ミクソリディアン</option>
+            <option value="locrian">ロクリアン</option>
+            <option value="majpenta">メジャーペンタトニック</option>
+            <option value="minpenta">マイナーペンタトニック</option>
+            <option value="blues">ブルース</option>
           </select>
         </label>
         <label>コードを光らせる
@@ -86,6 +112,8 @@
           </div>
           <!-- ドラムのパッド（ドラムトラックを選んでいるときだけ出る） -->
           <div id="pads" class="pads" hidden></div>
+          <!-- コードパッド（メロディ以外の楽器トラックを選んでいるときだけ出る） -->
+          <div id="chordpads" class="pads" hidden></div>
           <input id="pad-file" type="file" accept="audio/*" hidden>
         </div>
         <!-- ピアノロール -->
