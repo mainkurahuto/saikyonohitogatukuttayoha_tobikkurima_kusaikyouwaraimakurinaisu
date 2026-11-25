@@ -2522,6 +2522,7 @@ new ResizeObserver(() => drawRoll()).observe(canvas);
 window.addEventListener("resize", () => drawRoll());
 
 initSynthUI();
+initSynthViews();
 $("book-compose").addEventListener("click", () => switchBook("compose"));
 $("book-arrange").addEventListener("click", () => switchBook("arrange"));
 $("book-arrange").disabled = !BOOKS.arrange.steps.length;

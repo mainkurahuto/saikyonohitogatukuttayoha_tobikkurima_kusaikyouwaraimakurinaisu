@@ -28,7 +28,7 @@ function defaultSynth() {
       compressor: { on: false, amount: 50, gain: 30 },
       delay:      { on: false, time: "付点1/8", feedback: 35, mix: 30 },
       distortion: { on: false, drive: 40, mix: 60 },
-      eq:         { on: false, low: 0, mid: 0, high: 0 },
+      eq:         { on: false, low: 0, mid: 0, high: 0, lowFreq: 250, midFreq: 1200, highFreq: 5000 },
       filter:     { on: false, type: "lowpass", cutoff: 70, reso: 20 },
       flanger:    { on: false, depth: 50, rate: 30, mix: 50 },
       phaser:     { on: false, depth: 60, rate: 30, mix: 50 },
@@ -251,6 +251,10 @@ function makeChain(track) {
   let node = ch.input;
   for (const k of FX_ORDER) { node.connect(B[k].in); node = B[k].out; }
   node.connect(ch.vol).connect(busFor(track));
+  ch.analyser = audio.createAnalyser();   // 画面に音の成分（スペクトル）を出すため
+  ch.analyser.fftSize = 4096;
+  ch.analyser.smoothingTimeConstant = 0.8;
+  ch.vol.connect(ch.analyser);
 
   ch.reverbSize = -1;
   ch.update = (p, force) => updateChain(ch, p, force);
@@ -283,6 +287,9 @@ function updateChain(ch, p, force) {
   set(ch.distGain.gain, 1 / Math.pow(distK(fx.distortion.drive), 0.8));
 
   B.eq.mix(fx.eq.on, 1);
+  set(ch.eq.lo.frequency, fx.eq.lowFreq || 250);
+  set(ch.eq.mid.frequency, fx.eq.midFreq || 1200);
+  set(ch.eq.hi.frequency, fx.eq.highFreq || 5000);
   set(ch.eq.lo.gain, fx.eq.low);
   set(ch.eq.mid.gain, fx.eq.mid);
   set(ch.eq.hi.gain, fx.eq.high);
@@ -500,17 +507,20 @@ function renderSynth() {
 
   html += '<div class="syn-grid">';
   p.osc.forEach((o, i) => {
-    html += '<section class="syn-card' + (o.on ? "" : " off") + '"><div class="syn-title">' + onHtml("osc." + i + ".on", o.on) + "<b>OSC " + (i + 1) + "</b>" + waveSvg(o.wave) + "</div>" +
+    html += '<section class="syn-card' + (o.on ? "" : " off") + '"><div class="syn-title">' + onHtml("osc." + i + ".on", o.on) + "<b>OSC " + (i + 1) + "</b></div>" +
+      '<canvas class="osc-view" data-osc="' + i + '" aria-label="OSC ' + (i + 1) + ' の波の形"></canvas>' +
       controls([["波の形", "osc." + i + ".wave", WAVES, 0, o.wave], ...OSC_KNOBS.map(([l, k, mn, mx, u]) => [l, "osc." + i + "." + k, mn, mx, o[k], u])]) + "</section>";
   });
   html += '<section class="syn-card' + (p.noise.on ? "" : " off") + '"><div class="syn-title">' + onHtml("noise.on", p.noise.on) + "<b>NOISE</b></div>" +
     controls([["Level", "noise.level", 0, 100, p.noise.level]]) + '<p class="syn-note">ホワイトノイズ（「シャー」という音）</p></section>';
-  html += '<section class="syn-card"><div class="syn-title"><b>ENVELOPE（ADSR）</b></div>' + envSvg(p.env) +
+  html += '<section class="syn-card env-card"><div class="syn-title"><b>ENVELOPE（ADSR）</b><span class="syn-sub">点をドラッグ</span></div><canvas class="env-view" aria-label="ADSR の形"></canvas>' +
     controls([["Attack", "env.a", 0, 3000, p.env.a, "ms"], ["Decay", "env.d", 0, 3000, p.env.d, "ms"], ["Sustain", "env.s", 0, 100, p.env.s], ["Release", "env.r", 0, 3000, p.env.r, "ms"]]) + "</section>";
   html += '<section class="syn-card' + (p.wobble.on ? "" : " off") + '"><div class="syn-title">' + onHtml("wobble.on", p.wobble.on) + "<b>WOBBLE</b></div>" +
     controls([["速さ", "wobble.rate", WOBBLE_RATES, 0, p.wobble.rate], ["形", "wobble.shape", { sine: "なめらか（サイン）", saw: "ガクッと戻る（ノコギリ）" }, 0, p.wobble.shape], ["深さ", "wobble.depth", 0, 100, p.wobble.depth]]) +
     '<p class="syn-note">Filter のカットオフを、テンポに合わせて揺らします</p></section>';
   html += "</div>";
+  html += '<section class="syn-card wide"><div class="syn-title"><b>EQ ・ FILTER</b><span class="syn-sub">点をドラッグで動かせる（左右＝周波数、上下＝大きさ）。灰色は今鳴っている音の成分</span></div>' +
+    '<canvas class="eq-view" aria-label="EQ と Filter のグラフ"></canvas></section>';
 
   html += '<p class="syn-h">EFFECTS<span>上から順番にかかります</span></p><div class="syn-fx">';
   for (const k of FX_ORDER) {
@@ -520,6 +530,10 @@ function renderSynth() {
   }
   html += "</div>";
   box.innerHTML = html;
+  initAudio();          // グラフに音の成分を出すため（開くのはクリックしたときなので、ここで作ってよい）
+  chainFor(track);
+  drawSynthViews();
+  startSynthAnim();
 }
 
 // 設定の場所（"osc.0.pitch"）に値を書く
@@ -555,7 +569,7 @@ function initSynthUI() {
     const out = dial.nextElementSibling;
     out.innerHTML = v + (dial.dataset.unit ? "<small>" + dial.dataset.unit + "</small>" : "");
     setValue(dial.dataset.path, v, t);
-    if (dial.dataset.path.startsWith("env.")) box.querySelector(".env").outerHTML = envSvg(t.synth.env);
+    drawSynthViews();
   };
   let drag = null;
   box.addEventListener("pointerdown", (e) => {
@@ -627,4 +641,391 @@ function testSynth() {
   const low = ["bass", "subbass", "wobble"].includes(t.synth.preset);
   const pitches = low ? [36] : [60, 64, 67];
   for (const p of pitches) playSynth(t, p, 0, 100, now, low ? 1.6 : 1.0);
+}
+
+// ================================================
+// シンセの「見える化」：波の形・ADSR・EQ と Filter のグラフ
+// ================================================
+// canvas を、見た目の大きさ × 画面の細かさにそろえて、2D の道具を返す
+function fitCanvas(cv) {
+  const r = cv.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { g, w: r.width, h: r.height };
+}
+
+function drawSynthViews() {
+  const t = state.tracks[state.synthOpen];
+  if (!t || !t.synth) return;
+  const box = $("synth");
+  box.querySelectorAll(".osc-view").forEach((cv) => drawOscView(cv, t.synth.osc[Number(cv.dataset.osc)]));
+  const env = box.querySelector(".env-view");
+  if (env) drawEnvView(env, t.synth.env);
+  const eq = box.querySelector(".eq-view");
+  if (eq) drawEqView(eq, t);
+}
+
+// ---------- オシレーター：波の形（ユニゾンで重ねた分も薄く描く） ----------
+function waveAt(wave, ph) {
+  ph = ((ph % 1) + 1) % 1;
+  if (wave === "sine") return Math.sin(ph * 2 * Math.PI);
+  if (wave === "triangle") return 1 - 4 * Math.abs(ph - 0.5);
+  if (wave === "sawtooth") return 1 - 2 * ph;
+  return ph < 0.5 ? 1 : -1;
+}
+function drawOscView(cv, o) {
+  const { g, w, h } = fitCanvas(cv);
+  g.clearRect(0, 0, w, h);
+  g.fillStyle = "#15161a";
+  g.fillRect(0, 0, w, h);
+  g.fillStyle = "rgba(255,255,255,0.06)";
+  g.fillRect(0, h / 2, w, 1);
+  const amp = (h / 2 - 6) * (0.15 + 0.85 * (o.level / 100));
+  const cycles = 2;
+  const path = (phase, scale) => {
+    g.beginPath();
+    for (let x = 0; x <= w; x++) {
+      const y = h / 2 - waveAt(o.wave, (x / w) * cycles + phase) * amp * scale;
+      x ? g.lineTo(x, y) : g.moveTo(x, y);
+    }
+  };
+  const col = o.on ? "167,139,250" : "110,110,120";
+  // ユニゾン：少しずつずれた波を重ねて描く（デチューンが大きいほど、ずれも大きく）
+  const n = Math.max(1, Math.min(8, o.unison));
+  for (let u = 0; u < n && n > 1; u++) {
+    const spread = u / (n - 1) - 0.5;
+    path(spread * (o.detune / 100) * 0.5, 0.92);
+    g.strokeStyle = "rgba(" + col + ",0.28)";
+    g.lineWidth = 1;
+    g.stroke();
+  }
+  // 中心の波：塗りつぶし ＋ 線
+  path(0, 1);
+  g.lineTo(w, h / 2);
+  g.lineTo(0, h / 2);
+  g.closePath();
+  const grad = g.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, "rgba(" + col + ",0.45)");
+  grad.addColorStop(0.5, "rgba(" + col + ",0.08)");
+  grad.addColorStop(1, "rgba(" + col + ",0.45)");
+  g.fillStyle = grad;
+  g.fill();
+  path(0, 1);
+  g.strokeStyle = "rgb(" + col + ")";
+  g.lineWidth = 2;
+  g.stroke();
+  // 文字：波の名前・高さ
+  g.fillStyle = "#e8e8ea";
+  g.font = "bold 12px sans-serif";
+  g.textAlign = "center";
+  g.fillText(WAVES[o.wave], w / 2, 15);
+  g.textAlign = "left";
+  g.font = "11px sans-serif";
+  g.fillStyle = "#a1a3aa";
+  const pitch = (o.pitch > 0 ? "+" : "") + o.pitch + (o.fine ? (o.fine > 0 ? " +" : " ") + o.fine + "c" : "");
+  g.fillText(pitch, 6, h - 6);
+  if (n > 1) { g.textAlign = "right"; g.fillText(n + "枚", w - 6, h - 6); g.textAlign = "left"; }
+}
+
+// ---------- ADSR：区間ごとの幅を決めておき、点をドラッグできるようにする ----------
+// 時間 → 幅は √ を使う（短い時間も見やすく、長い時間もはみ出さない）
+const ENV_MAX = 3000;
+function envLayout(w, h, e) {
+  const seg = (w - 12) * 0.28, sus = (w - 12) * 0.16;
+  const fx = (ms) => seg * Math.sqrt(Math.min(ENV_MAX, ms) / ENV_MAX);
+  const top = 10, bottom = h - 18;
+  const y = (v) => bottom - v * (bottom - top);
+  const x0 = 6, x1 = x0 + fx(e.a), x2 = x1 + fx(e.d), x3 = x2 + sus, x4 = x3 + fx(e.r);
+  return { seg, sus, top, bottom, y, pts: [[x0, y(0)], [x1, y(1)], [x2, y(e.s / 100)], [x3, y(e.s / 100)], [x4, y(0)]] };
+}
+function drawEnvView(cv, e) {
+  const { g, w, h } = fitCanvas(cv);
+  const L = envLayout(w, h, e);
+  const P = L.pts;
+  g.clearRect(0, 0, w, h);
+  g.fillStyle = "#15161a";
+  g.fillRect(0, 0, w, h);
+  g.strokeStyle = "rgba(255,255,255,0.06)";
+  g.lineWidth = 1;
+  for (const v of [0.25, 0.5, 0.75]) { g.beginPath(); g.moveTo(0, L.y(v)); g.lineTo(w, L.y(v)); g.stroke(); }
+  // 曲線（減っていくところは少し丸める）
+  const curve = () => {
+    g.beginPath();
+    g.moveTo(P[0][0], P[0][1]);
+    g.quadraticCurveTo(P[0][0] + (P[1][0] - P[0][0]) * 0.6, P[1][1], P[1][0], P[1][1]);
+    g.quadraticCurveTo(P[1][0] + (P[2][0] - P[1][0]) * 0.2, P[2][1], P[2][0], P[2][1]);
+    g.lineTo(P[3][0], P[3][1]);
+    g.quadraticCurveTo(P[3][0] + (P[4][0] - P[3][0]) * 0.2, P[4][1], P[4][0], P[4][1]);
+  };
+  curve();
+  g.lineTo(P[0][0], P[0][1]);
+  const grad = g.createLinearGradient(0, L.top, 0, L.bottom);
+  grad.addColorStop(0, "rgba(64,200,190,0.55)");
+  grad.addColorStop(1, "rgba(64,200,190,0.05)");
+  g.fillStyle = grad;
+  g.fill();
+  curve();
+  g.strokeStyle = "#5fd8cc";
+  g.lineWidth = 2;
+  g.stroke();
+  // 点：A の頂上・D の終わり（＝S の高さ）・R の終わり
+  for (const k of [1, 2, 4]) {
+    g.beginPath();
+    g.arc(P[k][0], P[k][1], 5, 0, Math.PI * 2);
+    g.fillStyle = envDrag && envDrag.k === k ? "#ffffff" : "#d9fffb";
+    g.fill();
+  }
+  g.fillStyle = "#8a8c93";
+  g.font = "10px sans-serif";
+  g.textAlign = "center";
+  const mid = (a, b) => (P[a][0] + P[b][0]) / 2;
+  g.fillText("A", mid(0, 1), h - 5);
+  g.fillText("D", mid(1, 2), h - 5);
+  g.fillText("S", mid(2, 3), h - 5);
+  g.fillText("R", mid(3, 4), h - 5);
+  g.textAlign = "left";
+}
+
+// ---------- EQ と Filter のグラフ ----------
+const F_MIN = 20, F_MAX = 20000;
+const fToX = (f, w) => (Math.log(f / F_MIN) / Math.log(F_MAX / F_MIN)) * w;
+const xToF = (x, w) => F_MIN * Math.pow(F_MAX / F_MIN, Math.max(0, Math.min(1, x / w)));
+const DB_RANGE = 15;   // 曲線は ±15dB
+const hzToCutoff = (hz) => Math.round((Math.log(hz / 30) / Math.log(18000 / 30)) * 100);   // cutoffHz の逆
+
+// グラフの点：[色, 名前, 周波数, 上下の値(dB), 動かす設定]
+function eqPoints(t, w, h) {
+  const fx = t.synth.fx;
+  const yOf = (db) => h / 2 - (db / DB_RANGE) * (h / 2 - 12);
+  const pts = [];
+  if (fx.eq.on) {
+    pts.push({ color: "#4fa3ff", name: "低音", f: fx.eq.lowFreq || 250, db: fx.eq.low, gain: "fx.eq.low", freq: "fx.eq.lowFreq", fmin: 30, fmax: 1000 });
+    pts.push({ color: "#c070ff", name: "中音", f: fx.eq.midFreq || 1200, db: fx.eq.mid, gain: "fx.eq.mid", freq: "fx.eq.midFreq", fmin: 200, fmax: 8000 });
+    pts.push({ color: "#ff5a6a", name: "高音", f: fx.eq.highFreq || 5000, db: fx.eq.high, gain: "fx.eq.high", freq: "fx.eq.highFreq", fmin: 1500, fmax: 16000 });
+  }
+  if (fx.filter.on) pts.push({ color: "#a3e635", name: "Filter", f: cutoffHz(fx.filter.cutoff), db: (fx.filter.reso / 100) * 12, filter: true });
+  for (const p of pts) { p.x = fToX(p.f, w); p.y = yOf(p.db); }
+  return pts;
+}
+
+function drawEqView(cv, t) {
+  const { g, w, h } = fitCanvas(cv);
+  const MW = 14;                 // 右はしの音量メーターの幅
+  const gw = w - MW - 6;         // グラフの幅
+  const fx = t.synth.fx;
+  g.clearRect(0, 0, w, h);
+  g.fillStyle = "#15161a";
+  g.fillRect(0, 0, w, h);
+
+  // 目盛り
+  g.font = "10px sans-serif";
+  for (const f of [50, 100, 200, 500, 1000, 2000, 5000, 10000]) {
+    const x = fToX(f, gw);
+    g.fillStyle = "rgba(255,255,255,0.07)";
+    g.fillRect(Math.round(x), 0, 1, h);
+    g.fillStyle = "#6b6d74";
+    g.fillText(f >= 1000 ? f / 1000 + "k" : String(f), x + 3, h - 4);
+  }
+  const yOf = (db) => h / 2 - (db / DB_RANGE) * (h / 2 - 12);
+  for (const db of [-12, -6, 0, 6, 12]) {
+    g.fillStyle = db === 0 ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.06)";
+    g.fillRect(0, Math.round(yOf(db)), gw, 1);
+    g.fillStyle = "#c9a227";
+    g.fillText((db > 0 ? "+" : "") + db, gw - 22, yOf(db) - 2);
+  }
+
+  const ch = audio ? synthChains.get(t) : null;
+  // 今鳴っている音の成分（灰色の山）
+  let level = 0;
+  if (ch && ch.analyser) {
+    const an = ch.analyser;
+    const bins = new Float32Array(an.frequencyBinCount);
+    an.getFloatFrequencyData(bins);
+    const ny = audio.sampleRate / 2;
+    g.beginPath();
+    g.moveTo(0, h);
+    for (let x = 0; x <= gw; x += 2) {
+      const i = Math.min(bins.length - 1, Math.round((xToF(x, gw) / ny) * bins.length));
+      const db = Math.max(-100, Math.min(0, bins[i]));
+      g.lineTo(x, h - ((db + 100) / 100) * (h - 8));
+    }
+    g.lineTo(gw, h);
+    g.closePath();
+    g.fillStyle = "rgba(200,200,210,0.22)";
+    g.fill();
+    const td = new Float32Array(an.fftSize);
+    an.getFloatTimeDomainData(td);
+    let sum = 0;
+    for (const v of td) sum += v * v;
+    level = Math.sqrt(sum / td.length);
+  }
+
+  // EQ と Filter を通したときの、音の大きさの変わり方（曲線）
+  if (ch && (fx.eq.on || fx.filter.on)) {
+    const N = Math.ceil(gw / 2) + 1;
+    const freqs = new Float32Array(N);
+    for (let k = 0; k < N; k++) freqs[k] = xToF(k * 2, gw);
+    const total = new Float32Array(N).fill(0);
+    const add = (node) => {
+      const mag = new Float32Array(N), ph = new Float32Array(N);
+      node.getFrequencyResponse(freqs, mag, ph);
+      for (let k = 0; k < N; k++) total[k] += 20 * Math.log10(Math.max(1e-6, mag[k]));
+    };
+    if (fx.eq.on) { add(ch.eq.lo); add(ch.eq.mid); add(ch.eq.hi); }
+    if (fx.filter.on) add(ch.filter);
+    g.beginPath();
+    for (let k = 0; k < N; k++) {
+      const y = Math.max(2, Math.min(h - 2, yOf(total[k])));
+      k ? g.lineTo(k * 2, y) : g.moveTo(0, y);
+    }
+    g.strokeStyle = "#f5c542";
+    g.lineWidth = 2;
+    g.stroke();
+  } else {
+    g.fillStyle = "#6b6d74";
+    g.font = "12px sans-serif";
+    g.fillText(audio ? "EQ か Filter を ON にすると、曲線と点が出ます" : "▶ 試す を押すと、音の成分が出ます", 12, 20);
+  }
+
+  // 動かせる点
+  for (const p of eqPoints(t, gw, h)) {
+    g.beginPath();
+    g.arc(p.x, p.y, eqDrag && eqDrag.p.name === p.name ? 8 : 6, 0, Math.PI * 2);
+    g.fillStyle = p.color;
+    g.fill();
+    g.strokeStyle = "#15161a";
+    g.lineWidth = 2;
+    g.stroke();
+  }
+  if (eqDrag) {   // ドラッグ中の値
+    const p = eqDrag.p;
+    const f = p.filter ? cutoffHz(fx.filter.cutoff) : fx.eq[p.freq.split(".")[2]];
+    const text = p.name + "  " + (f >= 1000 ? (f / 1000).toFixed(1) + "kHz" : Math.round(f) + "Hz") +
+      (p.filter ? "  レゾナンス " + fx.filter.reso : "  " + (fx.eq[p.gain.split(".")[2]] > 0 ? "+" : "") + fx.eq[p.gain.split(".")[2]] + "dB");
+    g.fillStyle = "#ffffff";
+    g.font = "bold 12px sans-serif";
+    g.fillText(text, 10, 16);
+  }
+
+  // 音量メーター
+  const mx = w - MW;
+  g.fillStyle = "#0e0f12";
+  g.fillRect(mx, 4, MW, h - 8);
+  const lv = Math.max(0, Math.min(1, (20 * Math.log10(Math.max(1e-5, level)) + 60) / 60));   // -60dB 〜 0dB
+  const grad = g.createLinearGradient(0, h, 0, 0);
+  grad.addColorStop(0, "#2f9e57");
+  grad.addColorStop(0.75, "#c9d23a");
+  grad.addColorStop(1, "#e8603c");
+  g.fillStyle = grad;
+  g.fillRect(mx + 2, h - 4 - lv * (h - 8), MW - 4, lv * (h - 8));
+}
+
+// 開いている間は、灰色の山と音量メーターを動かし続ける
+let synthAnim = false;
+function startSynthAnim() {
+  if (synthAnim) return;
+  synthAnim = true;
+  const loop = () => {
+    const t = state.tracks[state.synthOpen];
+    const cv = $("synth").querySelector(".eq-view");
+    if (state.synthOpen === null || !t || !cv) { synthAnim = false; return; }
+    drawEqView(cv, t);
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+}
+
+// ---------- グラフの点をドラッグ ----------
+let envDrag = null, eqDrag = null;
+function initSynthViews() {
+  const box = $("synth");
+  const local = (e, cv) => { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top, w: r.width, h: r.height }; };
+  // 設定を変えたら、そのつまみの見た目もそろえる
+  const syncDial = (path, v) => {
+    const d = box.querySelector('.dial[data-path="' + path + '"]');
+    if (!d) return;
+    d.setAttribute("aria-valuenow", v);
+    d.innerHTML = dialSvg(v, Number(d.dataset.min), Number(d.dataset.max));
+    d.nextElementSibling.innerHTML = v + (d.dataset.unit ? "<small>" + d.dataset.unit + "</small>" : "");
+  };
+  const put = (t, path, v) => {
+    setPath(t.synth, path, v);
+    syncDial(path, v);
+  };
+
+  box.addEventListener("pointerdown", (e) => {
+    const t = state.tracks[state.synthOpen];
+    if (!t || e.button !== 0) return;
+    const env = e.target.closest(".env-view");
+    const eq = e.target.closest(".eq-view");
+    if (env) {
+      const m = local(e, env);
+      const P = envLayout(m.w, m.h, t.synth.env).pts;
+      let best = null;
+      for (const k of [1, 2, 4]) { const d = Math.hypot(P[k][0] - m.x, P[k][1] - m.y); if (d < 16 && (!best || d < best.d)) best = { k, d }; }
+      if (!best) return;
+      envDrag = { k: best.k, cv: env };
+      env.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    }
+    if (eq) {
+      const m = local(e, eq);
+      const gw = m.w - 20;
+      let best = null;
+      for (const p of eqPoints(t, gw, m.h)) { const d = Math.hypot(p.x - m.x, p.y - m.y); if (d < 16 && (!best || d < best.d)) best = { p, d }; }
+      if (!best) return;
+      eqDrag = { p: best.p, cv: eq };
+      eq.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    }
+  });
+  box.addEventListener("pointermove", (e) => {
+    const t = state.tracks[state.synthOpen];
+    if (!t) return;
+    if (envDrag) {
+      const m = local(e, envDrag.cv);
+      const L = envLayout(m.w, m.h, t.synth.env);
+      const P = L.pts;
+      const toMs = (dx) => Math.round(ENV_MAX * Math.pow(Math.max(0, Math.min(1, dx / L.seg)), 2));
+      const env = t.synth.env;
+      if (envDrag.k === 1) put(t, "env.a", toMs(m.x - P[0][0]));
+      if (envDrag.k === 2) {
+        put(t, "env.d", toMs(m.x - P[1][0]));
+        put(t, "env.s", Math.round(Math.max(0, Math.min(1, (L.bottom - m.y) / (L.bottom - L.top))) * 100));
+      }
+      if (envDrag.k === 4) put(t, "env.r", toMs(m.x - P[3][0]));
+      drawEnvView(envDrag.cv, env);
+    }
+    if (eqDrag) {
+      const m = local(e, eqDrag.cv);
+      const gw = m.w - 20;
+      const p = eqDrag.p;
+      const db = ((m.h / 2 - m.y) / (m.h / 2 - 12)) * DB_RANGE;
+      if (p.filter) {
+        put(t, "fx.filter.cutoff", Math.max(0, Math.min(100, hzToCutoff(xToF(m.x, gw)))));
+        put(t, "fx.filter.reso", Math.round(Math.max(0, Math.min(100, (db / 12) * 100))));
+      } else {
+        put(t, p.freq, Math.round(Math.max(p.fmin, Math.min(p.fmax, xToF(m.x, gw)))));
+        put(t, p.gain, Math.round(Math.max(-12, Math.min(12, db))));
+      }
+      initAudio();
+      chainFor(t).update(t.synth);
+      drawEqView(eqDrag.cv, t);
+    }
+  });
+  const end = () => {
+    if (envDrag || eqDrag) {
+      const t = state.tracks[state.synthOpen];
+      if (t && audio) chainFor(t).update(t.synth);
+      envDrag = null;
+      eqDrag = null;
+      drawSynthViews();
+    }
+  };
+  box.addEventListener("pointerup", end);
+  box.addEventListener("pointercancel", end);
+  new ResizeObserver(() => drawSynthViews()).observe(box);
 }

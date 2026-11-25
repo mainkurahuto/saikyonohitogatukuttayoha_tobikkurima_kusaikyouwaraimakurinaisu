@@ -423,3 +423,11 @@ svg.env { width: 100%; height: 50px; margin: 2px 0 4px; background: #1a1b1f; bor
 /* トラックを消す確認・名前の入力 */
 .track .ms.del.sure { width: auto; padding: 0 8px; background: #a33a2a; border-color: #c95a48; color: #fff; font-family: inherit; font-size: 12px; }
 .track .rename { flex-grow: 1; min-width: 0; min-height: 30px; padding: 0 6px; font-size: 14px; }
+
+/* シンセの見える化 */
+.osc-view { width: 100%; height: 74px; display: block; border-radius: 6px; margin-bottom: 4px; }
+.env-view { width: 100%; height: 110px; display: block; border-radius: 6px; margin-bottom: 4px; cursor: pointer; touch-action: none; }
+.syn-card.wide { grid-column: 1 / -1; margin-top: 8px; }
+.eq-view { width: 100%; height: 220px; display: block; border-radius: 6px; cursor: crosshair; touch-action: none; }
+.syn-sub { margin-left: 8px; font-size: 11px; font-weight: normal; color: #8a8c93; }
+.syn-card.env-card { grid-column: span 2; }
