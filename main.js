@@ -93,6 +93,7 @@ const TOP = 96, BOTTOM = 36;   // 音域（MIDI番号）：C7 〜 C2
 const ROW_H = 20;              // 1行の高さ(px)
 const KEY_W = 80;              // 左の鍵盤の幅(px)。ドラムのときはパッドの名前が入る
 const RULER_H = 24;            // 上の小節番号の高さ(px)
+const LANE_H = 70;             // 下の「音の強さ（ベロシティ）」の欄の高さ(px)
 const BAR = 48;                // 1小節 = 48
 const TOTAL = BAR * 8;         // 8小節 = 384
 const MAX_UNIT_W = 16;         // 一番アップしたときの幅
@@ -1691,7 +1692,7 @@ function resizeCanvas() {
 
   if (view.unitW === 0) {                    // 最初の1回：8小節全体が入る大きさ、C4あたりを真ん中に
     view.unitW = minUnitW();
-    view.y = (TOP - 66) * ROW_H - (H - RULER_H) / 2;
+    view.y = (TOP - 66) * ROW_H - (H - LANE_H - RULER_H) / 2;
   }
   clampView();
   return true;
@@ -1704,7 +1705,7 @@ function clampView() {
   view.unitW = Math.min(MAX_UNIT_W, Math.max(minUnitW(), view.unitW));
   const maxX = TOTAL - (W - KEY_W) / view.unitW;
   view.x = Math.min(Math.max(0, maxX), Math.max(0, view.x));
-  const maxY = rowCount() * ROW_H - (H - RULER_H);
+  const maxY = rowCount() * ROW_H - (H - LANE_H - RULER_H);
   view.y = Math.min(Math.max(0, maxY), Math.max(0, view.y));
 }
 
@@ -1730,6 +1731,7 @@ function drawNotes(track, alpha, isCurrent) {
     const x = timeToX(n.start) + 1;
     const y = pitchToY(n.pitch) + 1;
     const w = Math.max(2, n.length * view.unitW - 2);
+    ctx.globalAlpha = alpha * (0.35 + 0.65 * (n.velocity / 127));   // 弱い音ほど薄く
     ctx.fillStyle = track.color;
     ctx.beginPath();
     ctx.roundRect(x, y, w, ROW_H - 3, 3);
@@ -1752,12 +1754,12 @@ function drawRoll() {
   ctx.clearRect(0, 0, W, H);
   const scale = scalePcs();
   const firstRow = Math.floor(view.y / ROW_H);
-  const lastRow = Math.ceil((view.y + H - RULER_H) / ROW_H);
+  const lastRow = Math.ceil((view.y + H - LANE_H - RULER_H) / ROW_H);
 
   // ---- マス目（はみ出した分は切り取る） ----
   ctx.save();
   ctx.beginPath();
-  ctx.rect(KEY_W, RULER_H, W - KEY_W, H - RULER_H);
+  ctx.rect(KEY_W, RULER_H, W - KEY_W, H - LANE_H - RULER_H);
   ctx.clip();
 
   const drums = drumView();
@@ -1805,7 +1807,7 @@ function drawRoll() {
     if (!isBeat && state.grid * view.unitW < 6) continue;
     if (!isBar && isBeat && 12 * view.unitW < 6) continue;
     ctx.fillStyle = isBar ? "rgba(255,255,255,0.35)" : isBeat ? "rgba(255,255,255,0.13)" : "rgba(255,255,255,0.05)";
-    ctx.fillRect(Math.round(timeToX(t)), RULER_H, 1, H - RULER_H);
+    ctx.fillRect(Math.round(timeToX(t)), RULER_H, 1, H - LANE_H - RULER_H);
   }
 
   // 音：ほかのトラックは薄く、編集中のトラックははっきり（楽器とドラムは行の並びが違うので、同じ種類だけ重ねる）
@@ -1828,14 +1830,14 @@ function drawRoll() {
   // 再生位置の線
   if (state.playing) {
     ctx.fillStyle = "#ffffff";
-    ctx.fillRect(Math.round(timeToX(player.pos)), RULER_H, 2, H - RULER_H);
+    ctx.fillRect(Math.round(timeToX(player.pos)), RULER_H, 2, H - LANE_H - RULER_H);
   }
   ctx.restore();
 
   // ---- 左の鍵盤 ----
   ctx.save();
   ctx.beginPath();
-  ctx.rect(0, RULER_H, KEY_W, H - RULER_H);
+  ctx.rect(0, RULER_H, KEY_W, H - LANE_H - RULER_H);
   ctx.clip();
   // ドラム：パッドの名前を並べる
   if (drums) {
@@ -1893,6 +1895,72 @@ function drawRoll() {
     ctx.fillRect(Math.round(timeToX(player.pos)), 0, 2, RULER_H);
   }
   ctx.restore();
+  drawVelocityLane();
+}
+
+// ---- 下の「強さ」の欄：編集中のトラックの音を、棒の高さで見せる ----
+function drawVelocityLane() {
+  const top = H - LANE_H;
+  const base = H - 6, span = LANE_H - 14;   // 棒の根元と、最大の長さ
+  ctx.fillStyle = "#17181b";
+  ctx.fillRect(0, top, W, LANE_H);
+  ctx.fillStyle = "#2c2e34";
+  ctx.fillRect(0, top, W, 1);
+  ctx.fillStyle = "#a1a3aa";
+  ctx.font = "11px sans-serif";
+  ctx.fillText("強さ", 8, top + 18);
+  ctx.fillStyle = "#6b6d74";
+  ctx.font = "10px sans-serif";
+  ctx.fillText("ドラッグで", 8, top + 36);
+  ctx.fillText("変える", 8, top + 50);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(KEY_W, top + 1, W - KEY_W, LANE_H - 1);
+  ctx.clip();
+  for (let b = 0; b <= 8; b++) {   // 小節の線
+    ctx.fillStyle = "rgba(255,255,255,0.12)";
+    ctx.fillRect(Math.round(timeToX(b * BAR)), top, 1, LANE_H);
+  }
+  ctx.fillStyle = "rgba(255,255,255,0.06)";   // 真ん中（64）の目安線
+  ctx.fillRect(KEY_W, Math.round(base - span / 2), W - KEY_W, 1);
+  const track = state.tracks[state.current];
+  for (const n of track.notes) {
+    const x = Math.round(timeToX(n.start)) + 1;
+    const h = (n.velocity / 127) * span;
+    const sel = state.selected.has(n);
+    ctx.fillStyle = sel ? "#ffffff" : track.color;
+    ctx.fillRect(x, base - h, 3, h);
+    ctx.beginPath();
+    ctx.arc(x + 1.5, base - h, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (drag && drag.mode === "vel" && drag.show) {   // ドラッグ中は数字を出す
+    ctx.fillStyle = "#f2a541";
+    ctx.font = "bold 12px sans-serif";
+    ctx.fillText(String(drag.show.v), Math.min(W - 30, drag.show.x + 8), Math.max(top + 14, drag.show.y));
+  }
+  ctx.restore();
+}
+
+// 強さの欄の位置 → 強さ（1〜127）
+const velAt = (y) => Math.max(1, Math.min(127, Math.round(((H - 6 - y) / (LANE_H - 14)) * 127)));
+// その横位置にある音（頭の位置が近いもの）
+function notesAtX(x) {
+  const r = Math.max(4, (state.grid * view.unitW) / 2);
+  return currentNotes().filter((n) => Math.abs(timeToX(n.start) - x) <= r);
+}
+
+// 強さを変える：選択中の音の棒をつかんだら選択中の音を全部、そうでなければ、なぞった所の音を変える
+function setVelocity(x, y) {
+  const v = velAt(y);
+  const hit = notesAtX(x);
+  if (drag.group) {
+    for (const n of state.selected) n.velocity = v;
+  } else {
+    for (const n of hit) n.velocity = v;
+  }
+  drag.show = { v, x, y };
+  drawRoll();
 }
 
 // ================================================
@@ -2268,6 +2336,14 @@ canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("pointerdown", (e) => {
   const { x, y } = posFromEvent(e);
   if (y < RULER_H) return;                // 小節番号の上は無視
+  if (y >= H - LANE_H) {                  // 下の「強さ」の欄
+    if (x < KEY_W || e.button !== 0) return;
+    canvas.setPointerCapture(e.pointerId);
+    const hit = notesAtX(x);
+    drag = { mode: "vel", before: snapshot(), group: hit.some((n) => state.selected.has(n)) && state.selected.size > 1 };
+    setVelocity(x, y);
+    return;
+  }
   if (x < KEY_W) {                        // 鍵盤（ドラムはパッドの名前）を押すと、その音を鳴らす
     const p = pitchAt(y);
     const [lo, hi] = pitchRange();
@@ -2333,6 +2409,7 @@ canvas.addEventListener("pointermove", (e) => {
 
   // ドラッグしていないとき：場所に合わせてマウスカーソルの形を変える
   if (!drag) {
+    if (y >= H - LANE_H) { canvas.style.cursor = x >= KEY_W ? "ns-resize" : "default"; return; }
     const hit = x >= KEY_W && y >= RULER_H ? noteAt(x, y) : null;
     canvas.style.cursor = hit ? (nearRightEdge(hit, x) ? "ew-resize" : "move") : "default";
     return;
@@ -2344,6 +2421,7 @@ canvas.addEventListener("pointermove", (e) => {
     drawRoll();
     return;
   }
+  if (drag.mode === "vel") { setVelocity(x, y); return; }
 
   const raw = unitAt(x) - drag.startUnit;   // マウスが動いた量（48分単位、まだグリッドに合わせていない）
   const g = drag.orig.find((o) => o.n === drag.grab);
