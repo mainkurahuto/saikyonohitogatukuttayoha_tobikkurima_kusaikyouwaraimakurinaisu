@@ -22,12 +22,14 @@ const state = {
     // notes の中身：{ pitch, start, length, velocity }（ドラムトラックの pitch は、パッドの番号 0〜15）
     // type：トラックの種類。"inst"（楽器）か "drum"（ドラム）
     // instrument：音色（INSTRUMENTS のキー）　volume：音量（0〜100）
-    // fixed：最初からあるトラック（消せない。説明や早見表がこの2つを使うため）
-    { name: "メロディ", type: "inst", color: "#f2a541", mute: false, solo: false, volume: 80, instrument: "piano", notes: [], fixed: true },
-    { name: "コード",   type: "inst", color: "#7aa7e8", mute: false, solo: false, volume: 80, instrument: "piano", notes: [], fixed: true }
+    // role：最初からあるトラックの役目。"chord" のトラックは、早見表・コードを光らせる・ベースを作るが使う
+    { name: "メロディ", type: "inst", role: "melody", color: "#f2a541", mute: false, solo: false, volume: 80, instrument: "piano", notes: [] },
+    { name: "コード",   type: "inst", role: "chord",  color: "#7aa7e8", mute: false, solo: false, volume: 80, instrument: "piano", notes: [] }
   ],
   pad: 0,               // ドラムのパッド画面で選んでいるパッドの番号
   synthOpen: null,      // シンセの編集画面を開いているトラックの番号（閉じていれば null）
+  confirmRemove: null,  // 「消す？」になっているトラックの番号
+  renaming: null,       // 名前を変えているトラックの番号
   bassPattern: 0,       // 「ベースを入れる」のリズムの型
   chordSeq: [],         // コードパッドで選んだコードの並び（{ deg, seventh }）
   chord7: false,        // コードパッドを7thコードにするか
@@ -36,6 +38,20 @@ const state = {
 };
 
 const MAX_TRACKS = 8;
+
+// コードトラック（早見表などが使う）。消されていたら null
+const chordTrack = () => state.tracks.find((t) => t.role === "chord") || null;
+// コードトラックがなければ作る（早見表の「コードトラックに入れる」用）
+function ensureChordTrack() {
+  let t = chordTrack();
+  if (!t && state.tracks.length < MAX_TRACKS) {
+    addTrack("inst");
+    t = state.tracks[state.tracks.length - 1];
+    t.name = "コード";
+    t.role = "chord";
+  }
+  return t;
+}
 const TRACK_COLORS = ["#e86f6f", "#9ad06a", "#c48be8", "#5fd0c8", "#e8c547", "#e89a5f"];
 
 let clipboard = { notes: [], length: 0 };   // コピーした音（位置は先頭からの距離で持つ）
@@ -580,14 +596,21 @@ function addTrack(type) {
 
 function removeTrack(i) {
   const t = state.tracks[i];
-  if (!t || t.fixed) return;
-  if (t.notes.length > 0 && !confirm("「" + t.name + "」を消しますか？ 中の音も全部消えます。")) return;
+  if (!t || state.tracks.length <= 1) return;   // 最後の1つは消さない
   if (audio && buses.has(t)) buses.get(t).disconnect();
+  const beforeType = state.tracks[state.current].type;
   state.tracks.splice(i, 1);
+  // 消したトラックより後ろを編集していたら、番号が1つずれる
+  if (i < state.current || state.current >= state.tracks.length) state.current--;
+  else if (i === state.current) state.current = Math.min(i, state.tracks.length - 1);
+  const afterType = state.tracks[state.current].type;
+  if (beforeType !== afterType) { view["y_" + beforeType] = view.y; view.y = view["y_" + afterType] || 0; }
+  state.selected.clear();
   state.synthOpen = null;
+  state.confirmRemove = null;
   history.undo = [];
   history.redo = [];
-  selectTrack(Math.min(state.current, state.tracks.length - 1));
+  render();
 }
 
 // 編集するトラックを変える。楽器 ⇔ ドラムで行の並びが変わるので、縦のスクロール位置はそれぞれ覚えておく
@@ -1351,7 +1374,9 @@ function highlightForBar(bar) {
   if (h === "track") {
     // コードトラックで、その小節に鳴っている音を読み取る（一番低い音をルート音とみなす）
     const s = bar * BAR, e = s + BAR;
-    const inBar = state.tracks[1].notes.filter((n) => n.start < e && n.start + n.length > s);
+    const ct = chordTrack();
+    if (!ct) return null;
+    const inBar = ct.notes.filter((n) => n.start < e && n.start + n.length > s);
     if (inBar.length === 0) return null;
     const lowest = Math.min(...inBar.map((n) => n.pitch));
     return { pcs: new Set(inBar.map((n) => n.pitch % 12)), root: lowest % 12 };
@@ -1388,7 +1413,8 @@ function setHighlight(v) {
 // コード進行をコードトラックに入れる（1小節に1コード。4つなら2回繰り返して8小節にする）
 function insertProgression(i) {
   const cs = PROGRESSIONS[i].chords.map(([d, t]) => chordInKey(d, t));
-  putChords(state.tracks[1], cs);
+  const ct = ensureChordTrack();
+  if (ct) putChords(ct, cs);
 }
 
 // ---------- コードのリズム ----------
@@ -1454,7 +1480,7 @@ function insertBass(track) {
   const notes = [];
   for (let bar = 0; bar < 8; bar++) {
     const s0 = bar * BAR, e0 = s0 + BAR;
-    const inBar = state.tracks[1].notes.filter((n) => n.start < e0 && n.start + n.length > s0);
+    const inBar = chordTrack().notes.filter((n) => n.start < e0 && n.start + n.length > s0);
     if (!inBar.length) continue;
     const root = Math.min(...inBar.map((n) => n.pitch)) % 12;
     for (const [t, len] of hits) notes.push({ pitch: 36 + root, start: s0 + t, length: len, velocity: 100 });
@@ -1467,7 +1493,7 @@ function insertBass(track) {
 // コードパッドを出すトラック：メロディ以外の楽器トラック
 const chordPadTrack = () => {
   const t = state.tracks[state.current];
-  return !isPadTrack(t) && state.current !== 0 ? t : null;
+  return !isPadTrack(t) && t.role !== "melody" ? t : null;
 };
 
 function renderChordPads() {
@@ -1498,11 +1524,12 @@ function renderChordPads() {
     '<button data-action="rhythm"' + (track.notes.length ? "" : " disabled") + ">今のコードのリズムだけ変える</button>" +
     "</div>";
   // ベース：コードトラックのルート音から作る（コードトラック以外を選んでいるとき）
-  if (state.current !== 1) {
+  const ct = chordTrack();
+  if (ct && ct !== track) {
     html += '<p class="pads-title bass-title">ベースを作る<span>コードトラックのルート音から</span></p>' +
       '<label class="rhythm">リズム<select id="bass-pattern">' +
       BASS_PATTERNS.map((b, k) => '<option value="' + k + '"' + (k === state.bassPattern ? " selected" : "") + ">" + b.name + "</option>").join("") + "</select></label>" +
-      '<div class="pad-load"><button data-action="bass"' + (state.tracks[1].notes.length ? "" : " disabled") + ">このトラックにベースを入れる</button></div>";
+      '<div class="pad-load"><button data-action="bass"' + (ct.notes.length ? "" : " disabled") + ">このトラックにベースを入れる</button></div>";
   }
   box.innerHTML = html;
 }
@@ -1593,10 +1620,16 @@ function renderTracks() {
       '<div class="' + cls.join(" ") + '" data-index="' + i + '">' +
         '<div class="track-row">' +
           '<span class="dot" style="background:' + t.color + '"></span>' +
-          '<button class="name" data-action="select" title="ダブルクリックで名前を変える">' + name + "</button>" +
+          (state.renaming === i
+            ? '<input class="rename" value="' + name + '" maxlength="12" aria-label="トラックの名前">'
+            : '<button class="name" data-action="select" title="2回続けてクリックで名前を変える">' + name + "</button>") +
           '<button class="ms' + (t.mute ? " mute-on" : "") + '" data-action="mute" aria-label="' + name + 'をミュート" aria-pressed="' + t.mute + '">M</button>' +
           '<button class="ms' + (t.solo ? " solo-on" : "") + '" data-action="solo" aria-label="' + name + 'だけ再生" aria-pressed="' + t.solo + '">S</button>' +
-          (t.fixed ? "" : '<button class="ms del" data-action="remove" aria-label="' + name + 'を消す">×</button>') +
+          (state.tracks.length > 1
+            ? (state.confirmRemove === i
+                ? '<button class="ms del sure" data-action="remove" aria-label="' + name + 'を本当に消す">消す</button>'
+                : '<button class="ms del" data-action="remove" aria-label="' + name + 'を消す" title="トラックを消す（もう一度押すと消える）">×</button>')
+            : "") +
         "</div>" +
         kind +
         '<label class="vol"><span>音量</span><input type="range" class="vol-range" min="0" max="100" value="' + t.volume + '" aria-label="' + name + 'の音量"><output>' + t.volume + "</output></label>" +
@@ -1987,14 +2020,24 @@ $("tracks").addEventListener("click", (e) => {
   const i = Number(item.dataset.index);
   const t = state.tracks[i];
   const action = btn.dataset.action;
-  if (action === "remove") { removeTrack(i); return; }
+  if (action === "remove") {
+    // 1回目は「消す」に変わるだけ。もう一度押すと消える（3秒たつと元に戻る）
+    if (state.confirmRemove === i) { removeTrack(i); return; }
+    state.confirmRemove = i;
+    clearTimeout(removeTimer);
+    removeTimer = setTimeout(() => { state.confirmRemove = null; renderTracks(); }, 3000);
+    renderTracks();
+    return;
+  }
   if (action === "synth") { state.synthOpen = state.synthOpen === i ? null : i; if (state.current !== i) selectTrack(i); else render(); return; }
   if (action === "select") {
     // 2回続けて押したら名前を変える（1回目で一覧が作り直されるので、dblclick ではなく回数で見る）
     if (e.detail === 2) {
-      const name = prompt("トラックの名前", t.name);
-      if (name && name.trim()) t.name = name.trim().slice(0, 12);
-      render();
+      state.renaming = i;
+      renderTracks();
+      const input = $("tracks").querySelector(".rename");
+      input.focus();
+      input.select();
     } else {
       selectTrack(i);
     }
@@ -2004,6 +2047,23 @@ $("tracks").addEventListener("click", (e) => {
   if (action === "solo") t.solo = !t.solo;
   render();
 });
+
+let removeTimer = null;
+
+// 名前の入力：Enter か、ほかの所を押したら決定。Esc でやめる
+function finishRename(commit) {
+  const input = $("tracks").querySelector(".rename");
+  const t = state.tracks[state.renaming];
+  if (commit && input && t && input.value.trim()) t.name = input.value.trim().slice(0, 12);
+  state.renaming = null;
+  render();
+}
+$("tracks").addEventListener("keydown", (e) => {
+  if (!e.target.classList.contains("rename")) return;
+  if (e.key === "Enter") finishRename(true);
+  if (e.key === "Escape") finishRename(false);
+});
+$("tracks").addEventListener("focusout", (e) => { if (e.target.classList.contains("rename") && state.renaming !== null) finishRename(true); });
 
 // 音量のつまみ：動かしている間は作り直さず、数字と音量だけ変える
 $("tracks").addEventListener("input", (e) => {
@@ -2030,7 +2090,7 @@ $("tracks").addEventListener("change", (e) => {
   initAudio();
   audio.resume();
   const now = audio.currentTime + 0.02;
-  const pitches = i === 0 ? [72] : [60, 64, 67];
+  const pitches = t.role === "melody" ? [72] : [60, 64, 67];
   for (const p of pitches) playTrackNote(t, p, 0, 100, now, 0.6);
   e.target.blur();   // スペースキーで再生できるように、選択欄から外す
   render();

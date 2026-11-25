@@ -419,15 +419,44 @@ const FX_KNOBS = {
   reverb:     [["広さ", "size", 0, 100], ["混ぜる量", "mix", 0, 100]]
 };
 
-// つまみ（スライダー）か選択欄の HTML。path は設定の場所（"osc.0.pitch" など）
+// つまみか選択欄の HTML。path は設定の場所（"osc.0.pitch" など）
+// min が {…} なら選択欄、数字ならつまみ（上下にドラッグ・ホイールで回す。ダブルクリックで最初の値に戻る）
 function knobHtml(label, path, value, min, max, unit) {
-  if (typeof min === "object") {   // 選択肢
+  if (typeof min === "object") {
     const opts = Object.keys(min).map((k) => '<option value="' + k + '"' + (k === value ? " selected" : "") + ">" + (typeof min[k] === "string" ? min[k] : k) + "</option>").join("");
-    return '<label class="knob sel"><span>' + label + '</span><select data-path="' + path + '">' + opts + "</select></label>";
+    return '<label class="sel-row"><span>' + label + '</span><select data-path="' + path + '">' + opts + "</select></label>";
   }
-  return '<label class="knob"><span>' + label + '</span><input type="range" data-path="' + path + '" min="' + min + '" max="' + max + '" step="1" value="' + value + '">' +
-         "<output>" + value + (unit ? '<small>' + unit + "</small>" : "") + "</output></label>";
+  return '<div class="knob"><span class="knob-label">' + label + "</span>" +
+    '<div class="dial" role="slider" tabindex="0" data-path="' + path + '" data-min="' + min + '" data-max="' + max + '" data-unit="' + (unit || "") + '"' +
+    ' aria-label="' + label + '" aria-valuemin="' + min + '" aria-valuemax="' + max + '" aria-valuenow="' + value + '">' + dialSvg(value, min, max) + "</div>" +
+    '<output>' + value + (unit ? "<small>" + unit + "</small>" : "") + "</output></div>";
 }
+
+// つまみの絵：下の左（-135°）から右（+135°）まで回る。マイナスがあるつまみは、真上（0）から色がつく
+function dialSvg(value, min, max) {
+  const ang = (v) => -135 + ((v - min) / (max - min)) * 270;
+  const pt = (a, r) => [20 + r * Math.sin((a * Math.PI) / 180), 20 - r * Math.cos((a * Math.PI) / 180)];
+  const arc = (a1, a2, r) => {
+    const [x1, y1] = pt(a1, r), [x2, y2] = pt(a2, r);
+    return "M" + x1.toFixed(2) + " " + y1.toFixed(2) + " A" + r + " " + r + " 0 " + (Math.abs(a2 - a1) > 180 ? 1 : 0) + " " + (a2 > a1 ? 1 : 0) + " " + x2.toFixed(2) + " " + y2.toFixed(2);
+  };
+  const a = ang(value);
+  const from = min < 0 ? ang(0) : -135;
+  const [px, py] = pt(a, 11);
+  return '<svg viewBox="0 0 40 40" aria-hidden="true">' +
+    '<path class="dial-track" d="' + arc(-135, 135, 16) + '"/>' +
+    (Math.abs(a - from) > 0.5 ? '<path class="dial-val" d="' + arc(Math.min(from, a), Math.max(from, a), 16) + '"/>' : "") +
+    '<circle class="dial-knob" cx="20" cy="20" r="12"/>' +
+    '<line class="dial-pointer" x1="20" y1="20" x2="' + px.toFixed(2) + '" y2="' + py.toFixed(2) + '"/></svg>';
+}
+
+// 1枚のカードの中身：選択欄は上に並べ、つまみは横に並べる
+function controls(items) {
+  const sels = items.filter((x) => typeof x[2] === "object").map((x) => knobHtml(x[0], x[1], x[4], x[2]));
+  const dials = items.filter((x) => typeof x[2] !== "object").map((x) => knobHtml(x[0], x[1], x[4], x[2], x[3], x[5]));
+  return sels.join("") + (dials.length ? '<div class="dials">' + dials.join("") + "</div>" : "");
+}
+
 const onHtml = (path, on) => '<label class="sw"><input type="checkbox" data-path="' + path + '"' + (on ? " checked" : "") + "><span>ON</span></label>";
 
 // 波の形の小さな絵
@@ -462,27 +491,24 @@ function renderSynth() {
   box.hidden = false;
   const p = track.synth;
   let html = '<div class="syn-head"><b>シンセ：' + esc(track.name) + "</b>" +
-    '<label class="knob sel"><span>プリセット</span><select data-preset="1">' +
+    '<label class="sel-row"><span>プリセット</span><select data-preset="1">' +
     Object.keys(SYNTH_PRESETS).map((k) => '<option value="' + k + '"' + (k === p.preset ? " selected" : "") + ">" + SYNTH_PRESETS[k].name + "</option>").join("") +
     "</select></label>" +
     '<button data-syn="test">▶ 試す</button>' +
-    knobHtml("音量", "volume", p.volume, 0, 100) +
+    '<div class="dials">' + knobHtml("音量", "volume", p.volume, 0, 100) + "</div>" +
     '<div class="spacer"></div><button data-syn="close">閉じる</button></div>';
 
   html += '<div class="syn-grid">';
   p.osc.forEach((o, i) => {
     html += '<section class="syn-card' + (o.on ? "" : " off") + '"><div class="syn-title">' + onHtml("osc." + i + ".on", o.on) + "<b>OSC " + (i + 1) + "</b>" + waveSvg(o.wave) + "</div>" +
-      knobHtml("波の形", "osc." + i + ".wave", o.wave, WAVES) +
-      OSC_KNOBS.map(([l, k, mn, mx, u]) => knobHtml(l, "osc." + i + "." + k, o[k], mn, mx, u)).join("") + "</section>";
+      controls([["波の形", "osc." + i + ".wave", WAVES, 0, o.wave], ...OSC_KNOBS.map(([l, k, mn, mx, u]) => [l, "osc." + i + "." + k, mn, mx, o[k], u])]) + "</section>";
   });
   html += '<section class="syn-card' + (p.noise.on ? "" : " off") + '"><div class="syn-title">' + onHtml("noise.on", p.noise.on) + "<b>NOISE</b></div>" +
-    knobHtml("Level", "noise.level", p.noise.level, 0, 100) + '<p class="syn-note">ホワイトノイズ（「シャー」という音）</p></section>';
+    controls([["Level", "noise.level", 0, 100, p.noise.level]]) + '<p class="syn-note">ホワイトノイズ（「シャー」という音）</p></section>';
   html += '<section class="syn-card"><div class="syn-title"><b>ENVELOPE（ADSR）</b></div>' + envSvg(p.env) +
-    knobHtml("Attack", "env.a", p.env.a, 0, 3000, "ms") + knobHtml("Decay", "env.d", p.env.d, 0, 3000, "ms") +
-    knobHtml("Sustain", "env.s", p.env.s, 0, 100) + knobHtml("Release", "env.r", p.env.r, 0, 3000, "ms") + "</section>";
+    controls([["Attack", "env.a", 0, 3000, p.env.a, "ms"], ["Decay", "env.d", 0, 3000, p.env.d, "ms"], ["Sustain", "env.s", 0, 100, p.env.s], ["Release", "env.r", 0, 3000, p.env.r, "ms"]]) + "</section>";
   html += '<section class="syn-card' + (p.wobble.on ? "" : " off") + '"><div class="syn-title">' + onHtml("wobble.on", p.wobble.on) + "<b>WOBBLE</b></div>" +
-    knobHtml("速さ", "wobble.rate", p.wobble.rate, WOBBLE_RATES) + knobHtml("深さ", "wobble.depth", p.wobble.depth, 0, 100) +
-    knobHtml("形", "wobble.shape", p.wobble.shape, { sine: "なめらか（サイン）", saw: "ガクッと戻る（ノコギリ）" }) +
+    controls([["速さ", "wobble.rate", WOBBLE_RATES, 0, p.wobble.rate], ["形", "wobble.shape", { sine: "なめらか（サイン）", saw: "ガクッと戻る（ノコギリ）" }, 0, p.wobble.shape], ["深さ", "wobble.depth", 0, 100, p.wobble.depth]]) +
     '<p class="syn-note">Filter のカットオフを、テンポに合わせて揺らします</p></section>';
   html += "</div>";
 
@@ -490,7 +516,7 @@ function renderSynth() {
   for (const k of FX_ORDER) {
     const f = p.fx[k];
     html += '<section class="syn-card fx' + (f.on ? "" : " off") + '"><div class="syn-title">' + onHtml("fx." + k + ".on", f.on) + "<b>" + FX_NAMES[k] + "</b></div>" +
-      FX_KNOBS[k].map(([l, key, mn, mx, u]) => knobHtml(l, "fx." + k + "." + key, f[key], mn, mx, u)).join("") + "</section>";
+      controls(FX_KNOBS[k].map(([l, key, mn, mx, u]) => [l, "fx." + k + "." + key, mn, mx, f[key], u])) + "</section>";
   }
   html += "</div>";
   box.innerHTML = html;
@@ -508,28 +534,80 @@ function setPath(obj, path, v) {
 function initSynthUI() {
   const box = $("synth");
   const track = () => state.tracks[state.synthOpen];
-  const apply = (e, rerender) => {
-    const t = track();
-    const path = e.target.dataset.path;
-    if (!t || !path) return;
-    const v = e.target.type === "checkbox" ? e.target.checked : e.target.value;
+  // 値を設定に書いて、音に反映する
+  const setValue = (path, v, t) => {
     setPath(t.synth, path, v);
     if (path === "wobble.on" && v) t.synth.fx.filter.on = true;   // ウォブルは Filter を使うので、一緒に ON にする
-    if (audio) chainFor(t).update(t.synth);
-    if (e.target.type === "range") {
-      const out = e.target.nextElementSibling;
-      out.firstChild.textContent = e.target.value;
-      if (path.startsWith("env.")) box.querySelector(".env").outerHTML = envSvg(t.synth.env);
-    }
-    if (rerender) renderSynth();
-  };
-  box.addEventListener("input", (e) => { if (e.target.type === "range") { initAudio(); apply(e, false); } });
-  box.addEventListener("change", (e) => {
     initAudio();
-    if (e.target.dataset.preset) { applyPreset(track(), e.target.value); renderSynth(); testSynth(); return; }
-    if (e.target.type === "range") { e.target.blur(); return; }
-    apply(e, true);
-    e.target.blur();
+    chainFor(t).update(t.synth);
+  };
+
+  // ---- つまみ ----
+  // つまみの値を変えて、絵と数字だけ描き直す（全部作り直すとドラッグが切れるため）
+  const turn = (dial, v) => {
+    const t = track();
+    if (!t) return;
+    const min = Number(dial.dataset.min), max = Number(dial.dataset.max);
+    v = Math.round(Math.min(max, Math.max(min, v)));
+    if (v === Number(dial.getAttribute("aria-valuenow"))) return;
+    dial.setAttribute("aria-valuenow", v);
+    dial.innerHTML = dialSvg(v, min, max);
+    const out = dial.nextElementSibling;
+    out.innerHTML = v + (dial.dataset.unit ? "<small>" + dial.dataset.unit + "</small>" : "");
+    setValue(dial.dataset.path, v, t);
+    if (dial.dataset.path.startsWith("env.")) box.querySelector(".env").outerHTML = envSvg(t.synth.env);
+  };
+  let drag = null;
+  box.addEventListener("pointerdown", (e) => {
+    const dial = e.target.closest(".dial");
+    if (!dial || e.button !== 0) return;
+    e.preventDefault();
+    dial.focus();
+    dial.setPointerCapture(e.pointerId);
+    drag = { dial, y: e.clientY, v: Number(dial.getAttribute("aria-valuenow")) };
+  });
+  box.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const range = Number(drag.dial.dataset.max) - Number(drag.dial.dataset.min);
+    const px = e.shiftKey ? 600 : 150;   // 150px 動かすと端から端まで（Shift を押すと細かく）
+    turn(drag.dial, drag.v + ((drag.y - e.clientY) / px) * range);
+  });
+  box.addEventListener("pointerup", () => { drag = null; });
+  box.addEventListener("pointercancel", () => { drag = null; });
+  box.addEventListener("wheel", (e) => {
+    const dial = e.target.closest(".dial");
+    if (!dial) return;
+    e.preventDefault();
+    const range = Number(dial.dataset.max) - Number(dial.dataset.min);
+    const step = Math.max(1, Math.round(range / 100)) * (e.shiftKey ? 1 : 2);
+    turn(dial, Number(dial.getAttribute("aria-valuenow")) + (e.deltaY < 0 ? step : -step));
+  }, { passive: false });
+  box.addEventListener("dblclick", (e) => {   // ダブルクリックで最初の値に戻す
+    const dial = e.target.closest(".dial");
+    if (!dial) return;
+    const def = dial.dataset.path.split(".").reduce((o, k) => o[k], defaultSynth());
+    turn(dial, def);
+  });
+  box.addEventListener("keydown", (e) => {   // 矢印キーで1ずつ（Shift で10ずつ）
+    const dial = e.target.closest(".dial");
+    if (!dial) return;
+    const d = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1 }[e.key];
+    if (!d) return;
+    e.preventDefault();
+    e.stopPropagation();
+    turn(dial, Number(dial.getAttribute("aria-valuenow")) + d * (e.shiftKey ? 10 : 1));
+  });
+
+  // ---- ON/OFF・選択欄・プリセット ----
+  box.addEventListener("change", (e) => {
+    const t = track();
+    if (!t) return;
+    initAudio();
+    if (e.target.dataset.preset) { applyPreset(t, e.target.value); renderSynth(); testSynth(); return; }
+    const path = e.target.dataset.path;
+    if (!path) return;
+    setValue(path, e.target.type === "checkbox" ? e.target.checked : e.target.value, t);
+    renderSynth();
   });
   box.addEventListener("click", (e) => {
     const b = e.target.closest("button[data-syn]");
