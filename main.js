@@ -12,28 +12,18 @@ const state = {
   orderPick: {},   // 順番の選択：何個目の :::order か → 何番目の選択肢を選んだか（なければ最初）
   grid: 3,         // 1マスの長さ（48分単位。16分 = 3）
   noteLength: 3,   // 新しく置く音の長さ（最後に変えた長さを覚えておく）
-  key: 0,          // キーの主音（0 = C, 1 = C#, … 11 = B）
-  scale: "major",  // スケールの種類（SCALE_TYPES のキー）
+  scale: "C",
   bpm: 120,
   playing: false,
   current: 0,      // 今編集しているトラックの番号
   tracks: [
-    // notes の中身：{ pitch, start, length, velocity }（ドラムトラックの pitch は、パッドの番号 0〜15）
-    // type：トラックの種類。"inst"（楽器）か "drum"（ドラム）
-    // instrument：音色（INSTRUMENTS のキー）　volume：音量（0〜100）
-    // fixed：最初からあるトラック（消せない。説明や早見表がこの2つを使うため）
-    { name: "メロディ", type: "inst", color: "#f2a541", mute: false, solo: false, volume: 80, instrument: "piano", notes: [], fixed: true },
-    { name: "コード",   type: "inst", color: "#7aa7e8", mute: false, solo: false, volume: 80, instrument: "piano", notes: [], fixed: true }
+    // notes の中身：{ pitch, start, length, velocity }
+    // instrument：音色（INSTRUMENTS のキー）
+    { name: "メロディ", color: "#f2a541", mute: false, solo: false, instrument: "piano", notes: [] },
+    { name: "コード",   color: "#7aa7e8", mute: false, solo: false, instrument: "piano", notes: [] }
   ],
-  pad: 0,               // ドラムのパッド画面で選んでいるパッドの番号
-  chordSeq: [],         // コードパッドで選んだコードの並び（{ deg, seventh }）
-  chord7: false,        // コードパッドを7thコードにするか
-  rhythm: 0,            // コードのリズムの型（CHORD_RHYTHMS の番号）
   selected: new Set()   // 選択中の音（編集中のトラックの音そのもの）
 };
-
-const MAX_TRACKS = 8;
-const TRACK_COLORS = ["#e86f6f", "#9ad06a", "#c48be8", "#5fd0c8", "#e8c547", "#e89a5f"];
 
 let clipboard = { notes: [], length: 0 };   // コピーした音（位置は先頭からの距離で持つ）
 const history = { undo: [], redo: [] };     // 元に戻す・やり直し用の記録
@@ -47,32 +37,13 @@ const view = {
 
 
 // スケールに入っている音（0 = ド, 1 = ド♯ … 11 = シ）
-// スケールの種類：主音から何半音上の音を使うか
-// chords：コードを作るときに使う7音のスケール（ペンタトニックなど7音でないものは、元になるスケールを使う）
-const SCALE_TYPES = {
-  major:      { name: "メジャー",               steps: [0, 2, 4, 5, 7, 9, 11] },
-  minor:      { name: "マイナー（ナチュラル）", steps: [0, 2, 3, 5, 7, 8, 10] },
-  harmonic:   { name: "ハーモニックマイナー",   steps: [0, 2, 3, 5, 7, 8, 11] },
-  melodic:    { name: "メロディックマイナー",   steps: [0, 2, 3, 5, 7, 9, 11] },
-  dorian:     { name: "ドリアン",               steps: [0, 2, 3, 5, 7, 9, 10] },
-  phrygian:   { name: "フリジアン",             steps: [0, 1, 3, 5, 7, 8, 10] },
-  lydian:     { name: "リディアン",             steps: [0, 2, 4, 6, 7, 9, 11] },
-  mixolydian: { name: "ミクソリディアン",       steps: [0, 2, 4, 5, 7, 9, 10] },
-  locrian:    { name: "ロクリアン",             steps: [0, 1, 3, 5, 6, 8, 10] },
-  majpenta:   { name: "メジャーペンタトニック", steps: [0, 2, 4, 7, 9], chords: "major" },
-  minpenta:   { name: "マイナーペンタトニック", steps: [0, 3, 5, 7, 10], chords: "minor" },
-  blues:      { name: "ブルース",               steps: [0, 3, 5, 6, 7, 10], chords: "minor" }
-};
-// 今のキーとスケールで使う音の種類（0〜11）
-const scalePcs = () => SCALE_TYPES[state.scale].steps.map((i) => (state.key + i) % 12);
-// コードを作るときの7音（主音からの半音の数）
-const chordSteps = () => SCALE_TYPES[SCALE_TYPES[state.scale].chords || state.scale].steps;
+const SCALES = { C: [0, 2, 4, 5, 7, 9, 11], G: [7, 9, 11, 0, 2, 4, 6] };
 const BLACK = [1, 3, 6, 8, 10];
 const NAMES = ["ド", "ド♯", "レ", "レ♯", "ミ", "ファ", "ファ♯", "ソ", "ソ♯", "ラ", "ラ♯", "シ"];
 
 const TOP = 96, BOTTOM = 36;   // 音域（MIDI番号）：C7 〜 C2
 const ROW_H = 20;              // 1行の高さ(px)
-const KEY_W = 80;              // 左の鍵盤の幅(px)。ドラムのときはパッドの名前が入る
+const KEY_W = 64;              // 左の鍵盤の幅(px)
 const RULER_H = 24;            // 上の小節番号の高さ(px)
 const BAR = 48;                // 1小節 = 48
 const TOTAL = BAR * 8;         // 8小節 = 384
@@ -105,28 +76,7 @@ function initAudio() {
   master = audio.createGain();
   master.gain.value = 0.35;
   master.connect(audio.destination);
-  DRUM_BUFFERS = DRUM_PADS.map((pad) => makeBuffer(pad.dur, pad.gen));   // ドラムの音を作っておく
 }
-
-// ---------- トラックごとの音量 ----------
-// トラック1つにつき1つ、音量のつまみ（GainNode）を作り、全部の音をそこに通してから master へ
-const buses = new WeakMap();
-const volToGain = (v) => v / 80;   // 音量 80 で、そのままの大きさ
-function busFor(track) {
-  let b = buses.get(track);
-  if (!b) {
-    b = audio.createGain();
-    b.gain.value = volToGain(track.volume);
-    b.connect(master);
-    buses.set(track, b);
-  }
-  return b;
-}
-function setVolume(track, v) {
-  track.volume = v;
-  if (audio && buses.has(track)) buses.get(track).gain.setTargetAtTime(volToGain(v), audio.currentTime, 0.02);
-}
-const isDrum = (track) => track && track.type === "drum";
 
 const unitSec = () => 60 / state.bpm / 12;          // 48分1つぶんの秒数（1拍 = 12）
 const midiToFreq = (p) => 440 * Math.pow(2, (p - 69) / 12);
@@ -161,8 +111,7 @@ function findInstrument(name) {
 // 1音を time 秒に予約する
 // durSec を渡すと、BPMに関係なくその秒数だけ鳴らす（説明の中の ▶ ボタン用）
 // inst：音色の名前（INSTRUMENTS のキー）。書かなければピアノ
-// out：音の出口（トラックの音量のつまみ）。書かなければ全体の音量へ直接
-function playNote(pitch, lengthUnits, velocity, time, durSec, inst, out) {
+function playNote(pitch, lengthUnits, velocity, time, durSec, inst) {
   const ins = INSTRUMENTS[inst] || INSTRUMENTS.piano;
   const dur = Math.max(ins.attack + 0.01, durSec !== undefined ? durSec : lengthUnits * unitSec());
   const peak = 0.5 * (velocity / 127) * ins.gain;
@@ -173,7 +122,7 @@ function playNote(pitch, lengthUnits, velocity, time, durSec, inst, out) {
   g.gain.linearRampToValueAtTime(peak, time + ins.attack);                           // 立ち上がり
   g.gain.setTargetAtTime(peak * ins.sustain, time + ins.attack, ins.decay / 3);      // だんだん弱く
   g.gain.setTargetAtTime(0, time + dur, ins.release / 3);                            // 離したら消える
-  g.connect(out || master);
+  g.connect(master);
 
   // 高い音を削るフィルター
   let input = g;
@@ -208,133 +157,11 @@ function playNote(pitch, lengthUnits, velocity, time, durSec, inst, out) {
   player.voices.push({ g, oscs, end });
 }
 
-// ================================================
-// ドラム（パッドサンプラー）
-// ================================================
-// パッド16個の音は、ファイルを読み込まずに、ここで計算して作る（著作権の心配がない）
-// gen(t, i, sr)：t 秒目の音の大きさ（-1〜1）を返す。dur：音の長さ（秒）
-// 作った音は「サンプル」として AudioBuffer にしまい、パッドを押すとそれを鳴らす（サンプラーのしくみ）
-const noise = () => Math.random() * 2 - 1;
-const sq = (f, t) => (Math.sin(2 * Math.PI * f * t) >= 0 ? 1 : -1);          // 矩形波
-const METAL = [205.3, 304.4, 369.6, 522.7, 540, 800];                          // シンバルの金属っぽさを作る高さ
-const metal = (t, k) => METAL.reduce((s, f) => s + sq(f * k, t), 0) / METAL.length;
-
-// 音の高さが下がっていくサイン波（キック・タム用）。位相は呼ぶ側で足していく
-function sweep(state, t, f0, f1, time, sr) {
-  const f = f1 + (f0 - f1) * Math.exp(-t / time);
-  state.ph += (2 * Math.PI * f) / sr;
-  return Math.sin(state.ph);
-}
-
-// 高い音だけ通す・低い音だけ通す（1段のかんたんなフィルター）
-function highpass(data, cutoff, sr) {
-  const a = Math.exp((-2 * Math.PI * cutoff) / sr);
-  let prevIn = 0, prevOut = 0;
-  for (let i = 0; i < data.length; i++) {
-    const out = a * (prevOut + data[i] - prevIn);
-    prevIn = data[i];
-    prevOut = out;
-    data[i] = out;
-  }
-}
-function lowpass(data, cutoff, sr) {
-  const a = Math.exp((-2 * Math.PI * cutoff) / sr);
-  let acc = 0;
-  for (let i = 0; i < data.length; i++) { acc = (1 - a) * data[i] + a * acc; data[i] = acc; }
-}
-
-const DRUM_PADS = [
-  { name: "キック", dur: 0.45, gen: (s) => (t, i, sr) => Math.tanh(1.6 * sweep(s, t, 160, 48, 0.03, sr) * Math.exp(-t / 0.13)) + (t < 0.002 ? noise() * 0.3 : 0) },
-  { name: "スネア", dur: 0.3, hp: 1200, gen: (s) => (t, i, sr) => Math.sin(2 * Math.PI * 185 * t) * Math.exp(-t / 0.04) * 0.6 + noise() * Math.exp(-t / 0.08) },
-  { name: "クラップ", dur: 0.35, hp: 900, lp: 3500, gen: () => (t) => {
-      const burst = [0, 0.011, 0.022].reduce((s, b) => s + (t >= b ? Math.exp(-(t - b) / 0.005) : 0), 0);
-      return noise() * (burst * 0.8 + (t >= 0.025 ? Math.exp(-(t - 0.025) / 0.09) : 0));
-    } },
-  { name: "HH閉", dur: 0.09, hp: 7000, gen: () => (t) => (noise() * 0.7 + metal(t, 1.7) * 0.5) * Math.exp(-t / 0.022) },
-  { name: "HH開", dur: 0.5, hp: 6500, gen: () => (t) => (noise() * 0.7 + metal(t, 1.7) * 0.5) * Math.exp(-t / 0.2) },
-  { name: "クラッシュ", dur: 2.0, hp: 4000, gen: () => (t) => (noise() * 0.8 + metal(t, 2.3) * 0.4) * Math.exp(-t / 0.65) * Math.min(1, t / 0.003) },
-  { name: "ライド", dur: 1.4, hp: 3000, gen: () => (t) => (metal(t, 3.1) * 0.7 + noise() * 0.15 + Math.sin(2 * Math.PI * 3200 * t) * 0.2) * Math.exp(-t / 0.45) },
-  { name: "タム低", dur: 0.6, gen: (s) => (t, i, sr) => sweep(s, t, 140, 82, 0.08, sr) * Math.exp(-t / 0.22) },
-  { name: "タム中", dur: 0.5, gen: (s) => (t, i, sr) => sweep(s, t, 200, 120, 0.07, sr) * Math.exp(-t / 0.18) },
-  { name: "タム高", dur: 0.45, gen: (s) => (t, i, sr) => sweep(s, t, 280, 175, 0.06, sr) * Math.exp(-t / 0.15) },
-  { name: "リム", dur: 0.08, hp: 400, gen: () => (t) => (Math.sin(2 * Math.PI * 1700 * t) * 0.6 + Math.sin(2 * Math.PI * 520 * t) * 0.5 + noise() * 0.3) * Math.exp(-t / 0.012) },
-  { name: "カウベル", dur: 0.4, hp: 350, lp: 5000, gen: () => (t) => (sq(540, t) + sq(800, t)) * 0.5 * (t < 0.01 ? 1 : Math.exp(-(t - 0.01) / 0.09)) },
-  { name: "シェイカー", dur: 0.14, hp: 5000, gen: () => (t) => noise() * (t < 0.025 ? t / 0.025 : Math.exp(-(t - 0.025) / 0.03)) },
-  { name: "タンバリン", dur: 0.35, hp: 6000, gen: () => (t) => noise() * (Math.exp(-t / 0.12) * (0.6 + 0.4 * Math.abs(Math.sin(2 * Math.PI * 38 * t)))) },
-  { name: "スナップ", dur: 0.15, hp: 1500, gen: () => (t) => (noise() * 0.8 + Math.sin(2 * Math.PI * 2100 * t) * 0.4) * Math.exp(-t / 0.016) },
-  { name: "808キック", dur: 1.3, gen: (s) => (t, i, sr) => Math.tanh(1.3 * sweep(s, t, 120, 46, 0.05, sr) * Math.exp(-t / 0.55)) }
-];
-let DRUM_BUFFERS = null;   // 作ったパッドの音（AudioBuffer）。最初に音を鳴らすときに作る
-
-// 1つのパッドの音を作る：計算 → フィルター → 大きさをそろえる
-function makeBuffer(dur, gen) {
-  const sr = audio.sampleRate;
-  const buf = audio.createBuffer(1, Math.ceil(dur * sr), sr);
-  const data = buf.getChannelData(0);
-  const pad = DRUM_PADS.find((p) => p.gen === gen);
-  const f = gen({ ph: 0 });
-  for (let i = 0; i < data.length; i++) data[i] = f(i / sr, i, sr);
-  if (pad && pad.hp) highpass(data, pad.hp, sr);
-  if (pad && pad.lp) lowpass(data, pad.lp, sr);
-  let peak = 0;
-  for (let i = 0; i < data.length; i++) peak = Math.max(peak, Math.abs(data[i]));
-  const k = peak > 0 ? 0.9 / peak : 1;
-  const fade = Math.min(data.length, Math.round(0.01 * sr));   // 最後をなめらかに消す（プツッとならないように）
-  for (let i = 0; i < data.length; i++) {
-    data[i] *= k;
-    if (i >= data.length - fade) data[i] *= (data.length - i) / fade;
-  }
-  return buf;
-}
-
-// そのトラックのパッドの音（自分で読み込んだ音があればそちら）
-const padBuffer = (track, pad) => (track.custom && track.custom[pad] ? track.custom[pad].buffer : DRUM_BUFFERS[pad]);
-const padName = (track, pad) => (track.custom && track.custom[pad] ? track.custom[pad].name : DRUM_PADS[pad].name);
-
-// パッドを1回鳴らす
-function playDrum(track, pad, velocity, time) {
-  const buf = padBuffer(track, pad);
-  if (!buf) return;
-  const src = audio.createBufferSource();
-  src.buffer = buf;
-  const g = audio.createGain();
-  g.gain.value = 0.9 * (velocity / 127);
-  src.connect(g).connect(busFor(track));
-  src.start(time);
-  player.voices.push({ g, oscs: [src], end: time + buf.duration });
-}
-
-// リズムの型（1小節分）。[パッドの番号, 位置（48分単位）] の並び。1拍 = 12、8分 = 6、16分 = 3
-const BEATS = [];
-for (let b = 0; b < 4; b++) BEATS.push(b * 12);
-const DRUM_PATTERNS = [
-  { name: "四つ打ち", hits: [...BEATS.map((t) => [0, t]), [2, 12], [2, 36], ...BEATS.map((t) => [4, t + 6])] },
-  { name: "8ビート", hits: [[0, 0], [0, 24], [0, 30], [1, 12], [1, 36], ...[0, 6, 12, 18, 24, 30, 36, 42].map((t) => [3, t])] },
-  { name: "16ビート", hits: [[0, 0], [0, 18], [0, 24], [1, 12], [1, 36], ...Array.from({ length: 16 }, (_, k) => [3, k * 3])] },
-  { name: "ハーフタイム", hits: [[0, 0], [0, 30], [1, 24], ...[0, 6, 12, 18, 24, 30, 36, 42].map((t) => [3, t])] }
-];
-
-// 型を、編集中のドラムトラックの8小節全部に入れる（今ある音は置きかえる。Ctrl＋Z で戻せる）
-function insertDrumPattern(k) {
-  const track = state.tracks[state.current];
-  if (!isDrum(track)) return;
-  pushHistory();
-  const notes = [];
-  for (let bar = 0; bar < 8; bar++) {
-    for (const [pad, t] of DRUM_PATTERNS[k].hits) notes.push({ pitch: pad, start: bar * BAR + t, length: 3, velocity: pad === 3 || pad === 4 ? 80 : 110 });
-  }
-  track.notes = notes;
-  state.selected.clear();
-  render();
-}
-
 // 音を置いたり動かしたりしたとき、その高さを、編集中のトラックの音色で短く鳴らして確かめる
 function preview(pitch) {
   initAudio();
   audio.resume();
-  const track = state.tracks[state.current];
-  if (isDrum(track)) playDrum(track, pitch, 110, audio.currentTime);
-  else playNote(pitch, 6, 100, audio.currentTime, undefined, track.instrument, busFor(track));
+  playNote(pitch, 6, 100, audio.currentTime, undefined, state.tracks[state.current].instrument);
 }
 
 // 少し先（0.1秒ぶん）までの音を予約しておく。25ミリ秒ごとに呼ばれる
@@ -350,9 +177,7 @@ function schedule() {
     for (const track of state.tracks) {
       if (!isAudible(track)) continue;
       for (const n of track.notes) {
-        if (n.start !== player.nextUnit) continue;
-        if (isDrum(track)) playDrum(track, n.pitch, n.velocity, t);
-        else playNote(n.pitch, n.length, n.velocity, t, undefined, track.instrument, busFor(track));
+        if (n.start === player.nextUnit) playNote(n.pitch, n.length, n.velocity, t, undefined, track.instrument);
       }
     }
     player.nextUnit++;
@@ -416,47 +241,8 @@ function pushHistory() {
 }
 
 function restore(text) {
-  JSON.parse(text).forEach((notes, i) => { if (state.tracks[i]) state.tracks[i].notes = notes; });
+  JSON.parse(text).forEach((notes, i) => { state.tracks[i].notes = notes; });
   state.selected.clear();   // 中身が作り直されるので選択は外す
-}
-
-// ---------- トラックを増やす・消す・名前を変える ----------
-// トラックの数が変わると「元に戻す」の記録と合わなくなるので、記録は消す
-function addTrack(type) {
-  if (state.tracks.length >= MAX_TRACKS) return;
-  const used = state.tracks.map((t) => t.color);
-  const color = TRACK_COLORS.find((c) => !used.includes(c)) || TRACK_COLORS[0];
-  const base = type === "drum" ? "ドラム" : "楽器";
-  let name = base, k = 2;
-  while (state.tracks.some((t) => t.name === name)) name = base + (k++);
-  state.tracks.push({ name, type, color, mute: false, solo: false, volume: 80, instrument: "piano", notes: [], custom: {} });
-  history.undo = [];
-  history.redo = [];
-  selectTrack(state.tracks.length - 1);
-}
-
-function removeTrack(i) {
-  const t = state.tracks[i];
-  if (!t || t.fixed) return;
-  if (t.notes.length > 0 && !confirm("「" + t.name + "」を消しますか？ 中の音も全部消えます。")) return;
-  if (audio && buses.has(t)) buses.get(t).disconnect();
-  state.tracks.splice(i, 1);
-  history.undo = [];
-  history.redo = [];
-  selectTrack(Math.min(state.current, state.tracks.length - 1));
-}
-
-// 編集するトラックを変える。楽器 ⇔ ドラムで行の並びが変わるので、縦のスクロール位置はそれぞれ覚えておく
-function selectTrack(i) {
-  const before = isDrum(state.tracks[state.current]);
-  if (state.current !== i) state.selected.clear();   // 選択は編集中のトラックの音だけ
-  state.current = i;
-  const after = isDrum(state.tracks[i]);
-  if (before !== after) {
-    view[before ? "yDrum" : "yInst"] = view.y;
-    view.y = view[after ? "yDrum" : "yInst"] || 0;
-  }
-  render();
 }
 
 function undo() {
@@ -502,11 +288,9 @@ function paste() {
   if (at >= TOTAL) return;
   pushHistory();
   state.selected.clear();
-  const [lo, hi] = pitchRange();
   for (const c of clipboard.notes) {
     const start = at + c.start;
     if (start >= TOTAL) continue;   // 8小節からはみ出す音は捨てる
-    if (c.pitch < lo || c.pitch > hi) continue;   // 楽器 ⇔ ドラムで、行がない音も捨てる
     const n = { pitch: c.pitch, start: start, length: Math.min(c.length, TOTAL - start), velocity: c.velocity };
     currentNotes().push(n);
     state.selected.add(n);           // 貼り付けた音を選択しておく（そのまま動かせる）
@@ -652,7 +436,6 @@ const PC = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
 const CHORD_TYPES = {
   "": [0, 4, 7], m: [0, 3, 7], "7": [0, 4, 7, 10], maj7: [0, 4, 7, 11], m7: [0, 3, 7, 10],
   dim: [0, 3, 6], sus4: [0, 5, 7], aug: [0, 4, 8],
-  m7b5: [0, 3, 6, 10], dim7: [0, 3, 6, 9], mM7: [0, 3, 7, 11], "maj7#5": [0, 4, 8, 11],
   "13": [0, 4, 10, 14, 21]   // 13：ルート・3度・7度・9度・13度（5度と11度は抜く。11度は3度とぶつかるので、抜くのが普通）
 };
 
@@ -897,9 +680,8 @@ function orderHtml(k) {
 
 // クイズ1つ分の HTML（答えたかどうかで見た目が変わる）
 // stepIndex は steps の番号（並べ替えても変わらない番号）。答えもこの番号で覚える
-// page を渡すと、steps 以外のページ（ジャンル別など）のクイズも出せる
-function quizHtml(stepIndex, qi, page) {
-  const q = (page || steps[stepIndex]).quizzes[qi];
+function quizHtml(stepIndex, qi) {
+  const q = steps[stepIndex].quizzes[qi];
   const ans = state.answers[stepIndex + "-" + qi];
   const answered = ans !== undefined;
   const attrs = ' data-step="' + stepIndex + '" data-quiz="' + qi + '"';
@@ -1111,12 +893,9 @@ $("qol").addEventListener("scroll", hideTip);
 
 // ---------- 早見表（コードの構成音・定番のコード進行） ----------
 const EN_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-const keyLabel = () => EN_NAMES[state.key] + " " + SCALE_TYPES[state.scale].name;
-const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII"];
-const MAJOR = [0, 2, 4, 5, 7, 9, 11];
-// 3度ずつ重ねた音の間隔 → コードの種類
-const TRIAD_TYPES = { "4,7": "", "3,7": "m", "3,6": "dim", "4,8": "aug" };
-const SEVENTH_TYPES = { "4,7,11": "maj7", "3,7,10": "m7", "4,7,10": "7", "3,6,10": "m7b5", "3,6,9": "dim7", "3,7,11": "mM7", "4,8,11": "maj7#5" };
+const KEY_NAMES = { C: "Cメジャー", G: "Gメジャー" };
+const DEGREES = ["I", "ii", "iii", "IV", "V", "vi", "vii°"];     // キーの何番目の音から作ったコードか
+const DIATONIC_TYPES = ["", "m", "m", "", "", "m", "dim"];         // メジャーキーで自然にできるコードの種類
 
 // 定番のコード進行。[キーの何番目(0から), コードの種類（書かなければ自然な種類）]
 const PROGRESSIONS = [
@@ -1133,25 +912,14 @@ const PROGRESSIONS = [
 const midiName = (m) => EN_NAMES[m % 12] + (Math.floor(m / 12) - 1);   // 60 → "C4"
 
 // キーの何番目のコードか → { 名前, 度数, 構成音(MIDI), ベース音(MIDI) }
-// キーの何番目（0から）のコードか → { 名前, 度数, 構成音(MIDI), ベース音(MIDI) }
-// type を書かなければ、スケールの音を3度ずつ重ねて自然にできる種類。seventh なら4つ重ねた7thコード
-function chordInKey(deg, type, seventh) {
-  const st = chordSteps();
-  const at = (k) => (st[(deg + k) % 7] - st[deg] + 12) % 12;   // ルートから何半音上か
-  const rootPc = (state.key + st[deg]) % 12;
-  let t = type;
-  if (t === undefined) t = seventh ? SEVENTH_TYPES[[at(2), at(4), at(6)].join(",")] : TRIAD_TYPES[[at(2), at(4)].join(",")];
-  if (t === undefined) t = "";
+function chordInKey(key, deg, type) {
+  const rootPc = SCALES[key][deg];
+  const t = type !== undefined ? type : DIATONIC_TYPES[deg];
   const name = EN_NAMES[rootPc] + t;
   const notes = chordToMidis(name);
-  // 度数：メジャースケールより低ければ ♭、高ければ ♯。暗いコードは小文字
-  const diff = st[deg] - MAJOR[deg];
-  const acc = diff < 0 ? "♭" : diff > 0 ? "♯" : "";
-  let roman = ROMAN[deg];
-  if (/^m(?!aj)|^dim/.test(t)) roman = roman.toLowerCase();
-  const MARKS = { "": "", m: "", dim: "°", aug: "+", dim7: "°7", m7b5: "ø7" };
-  const mark = t in MARKS ? MARKS[t] : t.replace(/^m(?!aj)/, "");
-  return { name, degree: acc + roman + mark, notes, bass: notes[0] - 12 };
+  let degree = DEGREES[deg];
+  if (t === "7" || t === "13") degree = degree.toUpperCase().replace("°", "") + t;   // 例：iii に 7 を付けると III7、V に 13 で V13
+  return { name, degree, notes, bass: notes[0] - 12 };
 }
 
 // <play=...> に渡す書き方を作る（ベース音を入れるなら「+ベース音」を足す）
@@ -1160,8 +928,9 @@ function chordSpec(c, beats) {
 }
 
 function chartHtml() {
+  const key = state.scale;
   let html = '<p class="toc-title">早見表</p>';
-  html += '<p class="toc-score">キー：' + keyLabel() + "（作曲画面の「キー」「スケール」を変えると、表も変わります）</p>";
+  html += '<p class="toc-score">キー：' + KEY_NAMES[key] + "（作曲画面の「スケール」を変えると、表も変わります）</p>";
   html += '<label class="chart-bass"><input type="checkbox" id="chart-bass"' + (state.chartBass ? " checked" : "") +
           "><span>ベース音（一番下の音の1オクターブ下）も一緒に</span></label>";
 
@@ -1169,7 +938,7 @@ function chartHtml() {
   html += '<h3 class="chart-h">このキーで使えるコード</h3>';
   html += '<table class="chart-table"><thead><tr><th>度数</th><th>コード</th><th>構成音</th><th></th></tr></thead><tbody>';
   for (let d = 0; d < 7; d++) {
-    const c = chordInKey(d);
+    const c = chordInKey(key, d);
     const names = c.notes.map((m) => NAMES[m % 12]).join("・");
     const bass = state.chartBass ? '<span class="chart-basstext">＋ベース ' + NAMES[c.bass % 12] + "</span>" : "";
     html += "<tr><td class=\"chart-deg\">" + c.degree + '</td><td class="chart-name">' + c.name + "</td><td>" + names + bass +
@@ -1177,12 +946,12 @@ function chartHtml() {
             '<button class="hl-btn small" data-hl="' + c.name + '" aria-label="' + c.name + 'の音を作曲画面で光らせる" title="作曲画面で光らせる"><span class="hl-dot"></span></button></td></tr>';
   }
   html += "</tbody></table>";
-  html += '<p class="chart-note">大文字（I・IV・V など）は明るいコード、小文字（ii・vi など）は暗いコードです。° のついたコードは不安定なので、最初は使わなくて大丈夫。</p>';
+  html += '<p class="chart-note">I・IV・V（大文字）は明るいコード、ii・iii・vi（小文字）は暗いコードです。vii° は不安定なので、最初は使わなくて大丈夫。</p>';
 
   // 定番のコード進行
   html += '<h3 class="chart-h">定番のコード進行</h3>';
   PROGRESSIONS.forEach((p, i) => {
-    const cs = p.chords.map(([d, t]) => chordInKey(d, t));
+    const cs = p.chords.map(([d, t]) => chordInKey(key, d, t));
     const bars = cs.length === 4 ? "4小節（8小節なら2回）" : cs.length + "小節";
     html += '<div class="prog">';
     html += '<p class="prog-name">' + p.name + '<span class="prog-bars">' + bars + "</span></p>";
@@ -1215,7 +984,7 @@ function highlightForBar(bar) {
 
 // 作曲画面の「コードを光らせる」の選択欄を作り直す（キーが変わると中身も変わる）
 function renderHlSelect() {
-  const names = [0, 1, 2, 3, 4, 5, 6].map((d) => chordInKey(d).name);
+  const names = [0, 1, 2, 3, 4, 5, 6].map((d) => chordInKey(state.scale, d).name);
   if (state.highlight && state.highlight !== "track" && !names.includes(state.highlight)) names.push(state.highlight);
   let html = '<option value="">なし</option><option value="track">コードトラックに合わせる</option>';
   for (const n of names) html += '<option value="' + n + '">' + n + "</option>";
@@ -1239,97 +1008,25 @@ function setHighlight(v) {
 
 // コード進行をコードトラックに入れる（1小節に1コード。4つなら2回繰り返して8小節にする）
 function insertProgression(i) {
-  const cs = PROGRESSIONS[i].chords.map(([d, t]) => chordInKey(d, t));
-  putChords(state.tracks[1], cs);
-}
-
-// ---------- コードのリズム ----------
-// 1小節の中で、コードを鳴らす [位置, 長さ]（48分単位。1拍 = 12）
-const CHORD_RHYTHMS = [
-  { name: "1つ打ち（全音符）", hits: [[0, 48]] },
-  { name: "2つ打ち（2分音符）", hits: [[0, 24], [24, 24]] },
-  { name: "4つ打ち（4分音符）", hits: [[0, 12], [12, 12], [24, 12], [36, 12]] },
-  { name: "付点8分×2＋8分（×2）", hits: [[0, 9], [9, 9], [18, 6], [24, 9], [33, 9], [42, 6]] },
-  { name: "付点4分×2＋4分", hits: [[0, 18], [18, 18], [36, 12]] }
-];
-
-// コードの並びを、選んでいるリズムで track に入れる（1小節に1コード。足りなければ最初から繰り返して8小節にする）
-function putChords(track, cs) {
-  if (!cs.length) return;
+  const cs = PROGRESSIONS[i].chords.map(([d, t]) => chordInKey(state.scale, d, t));
   pushHistory();
-  const hits = CHORD_RHYTHMS[state.rhythm].hits;
   const notes = [];
   for (let bar = 0; bar < 8; bar++) {
     const c = cs[bar % cs.length];
     const pitches = state.chartBass ? [c.bass, ...c.notes] : c.notes;
-    for (const [t, len] of hits) {
-      for (const p of pitches) notes.push({ pitch: p, start: bar * BAR + t, length: len, velocity: 90 });
-    }
+    for (const p of pitches) notes.push({ pitch: p, start: bar * BAR, length: BAR, velocity: 90 });
   }
-  track.notes = notes;
+  state.tracks[1].notes = notes;
   state.selected.clear();
   render();
-}
-
-// 今あるコードはそのままで、リズムだけ選んだ型に変える（小節ごとに、その小節で鳴っている音の高さを集めて並べ直す）
-function applyRhythm(track) {
-  const hits = CHORD_RHYTHMS[state.rhythm].hits;
-  pushHistory();
-  const notes = [];
-  for (let bar = 0; bar < 8; bar++) {
-    const s0 = bar * BAR, e0 = s0 + BAR;
-    const pitches = [...new Set(track.notes.filter((n) => n.start < e0 && n.start + n.length > s0).map((n) => n.pitch))];
-    for (const [t, len] of hits) {
-      for (const p of pitches) notes.push({ pitch: p, start: s0 + t, length: len, velocity: 90 });
-    }
-  }
-  track.notes = notes;
-  state.selected.clear();
-  render();
-}
-
-// コードパッドを出すトラック：メロディ以外の楽器トラック
-const chordPadTrack = () => {
-  const t = state.tracks[state.current];
-  return !isDrum(t) && state.current !== 0 ? t : null;
-};
-
-function renderChordPads() {
-  const track = chordPadTrack();
-  const box = $("chordpads");
-  box.hidden = !track;
-  if (!track) return;
-  let html = '<p class="pads-title">コードパッド<span>押すと鳴って、下に並ぶ</span></p><div class="pad-grid">';
-  for (let d = 0; d < 7; d++) {
-    const c = chordInKey(d, undefined, state.chord7);
-    html += '<button class="pad chord-pad" data-deg="' + d + '"><b>' + c.name + "</b><small>" + c.degree + "</small></button>";
-  }
-  html += "</div>";
-  html += '<label class="check"><input type="checkbox" id="chord7"' + (state.chord7 ? " checked" : "") + '>7thコードにする</label>';
-  html += '<label class="check"><input type="checkbox" id="chord-bass"' + (state.chartBass ? " checked" : "") + '>ベース音も入れる</label>';
-  // 選んだコードの並び
-  html += '<div class="seq">';
-  if (state.chordSeq.length === 0) html += '<p class="seq-empty">パッドを押すと、ここに並びます（8つまで）</p>';
-  state.chordSeq.forEach((x, i) => {
-    html += '<button class="seq-chip" data-seq="' + i + '" aria-label="' + (i + 1) + "番目を消す" + '">' + chordInKey(x.deg, undefined, x.seventh).name + "<span>×</span></button>";
-  });
-  html += "</div>";
-  html += '<label class="rhythm">リズム<select id="rhythm">' +
-    CHORD_RHYTHMS.map((r, k) => '<option value="' + k + '"' + (k === state.rhythm ? " selected" : "") + ">" + r.name + "</option>").join("") + "</select></label>";
-  html += '<div class="pad-load">' +
-    '<button data-action="seq-insert"' + (state.chordSeq.length ? "" : " disabled") + ">このトラックに入れる</button>" +
-    '<button data-action="seq-clear"' + (state.chordSeq.length ? "" : " disabled") + ">並びを消す</button>" +
-    '<button data-action="rhythm"' + (track.notes.length ? "" : " disabled") + ">今のコードのリズムだけ変える</button>" +
-    "</div>";
-  box.innerHTML = html;
 }
 
 // 説明のステップ：lessons.js に書いた文章を読み込んで作る
 // （上の関数や決まりごとを全部書き終わってから実行する）
 const steps = LESSON_SOURCES.map((src, i) => parseLesson(src, i));
-let order = computeOrder();   // 表示する順番（steps の番号の並び）。コード先・メロ先などで変わる
+let order = computeOrder();
 // QOL（便利な機能）のページ：qol.js に書いた文章を、説明と同じ書き方で読み込む
-const QOL_PAGE = parseLesson(QOL_SOURCES.join("\n"), "qol");
+const QOL_PAGE = parseLesson(QOL_SOURCES.join("\n"), "qol");   // 表示する順番（steps の番号の並び）。コード先・メロ先などで変わる
 
 // ================================================
 // 5. 描画（データを見て画面を全部作り直す）
@@ -1344,13 +1041,9 @@ function render() {
   $("play").classList.toggle("active", state.playing);
 
   renderTracks();
-  renderPads();
-  renderChordPads();
   renderHlSelect();
   drawRoll();
 }
-
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 // トラック一覧を作り直す
 function renderTracks() {
@@ -1359,62 +1052,23 @@ function renderTracks() {
     const cls = ["track"];
     if (i === state.current) cls.push("selected");
     if (!isAudible(t)) cls.push("silent");
-    const name = esc(t.name);
-    // 楽器トラックは音色の選択欄、ドラムトラックは「ドラム」の印
-    let kind;
-    if (isDrum(t)) {
-      kind = '<p class="kind">ドラム（パッド16個）</p>';
-    } else {
-      let options = "";
-      for (const key in INSTRUMENTS) {
-        options += '<option value="' + key + '"' + (key === t.instrument ? " selected" : "") + ">" + INSTRUMENTS[key].name + "</option>";
-      }
-      kind = '<select class="inst" data-action="inst" aria-label="' + name + 'の音色">' + options + "</select>";
+    // 音色の選択欄
+    let options = "";
+    for (const key in INSTRUMENTS) {
+      options += '<option value="' + key + '"' + (key === t.instrument ? " selected" : "") + ">" + INSTRUMENTS[key].name + "</option>";
     }
     html +=
       '<div class="' + cls.join(" ") + '" data-index="' + i + '">' +
         '<div class="track-row">' +
           '<span class="dot" style="background:' + t.color + '"></span>' +
-          '<button class="name" data-action="select" title="ダブルクリックで名前を変える">' + name + "</button>" +
-          '<button class="ms' + (t.mute ? " mute-on" : "") + '" data-action="mute" aria-label="' + name + 'をミュート" aria-pressed="' + t.mute + '">M</button>' +
-          '<button class="ms' + (t.solo ? " solo-on" : "") + '" data-action="solo" aria-label="' + name + 'だけ再生" aria-pressed="' + t.solo + '">S</button>' +
-          (t.fixed ? "" : '<button class="ms del" data-action="remove" aria-label="' + name + 'を消す">×</button>') +
-        "</div>" +
-        kind +
-        '<label class="vol"><span>音量</span><input type="range" class="vol-range" min="0" max="100" value="' + t.volume + '" aria-label="' + name + 'の音量"><output>' + t.volume + "</output></label>" +
-      "</div>";
+          '<button class="name" data-action="select">' + t.name + '</button>' +
+          '<button class="ms' + (t.mute ? " mute-on" : "") + '" data-action="mute" aria-label="' + t.name + 'をミュート" aria-pressed="' + t.mute + '">M</button>' +
+          '<button class="ms' + (t.solo ? " solo-on" : "") + '" data-action="solo" aria-label="' + t.name + 'だけ再生" aria-pressed="' + t.solo + '">S</button>' +
+        '</div>' +
+        '<select class="inst" data-action="inst" aria-label="' + t.name + 'の音色">' + options + '</select>' +
+      '</div>';
   });
   $("tracks").innerHTML = html;
-  const full = state.tracks.length >= MAX_TRACKS;
-  $("add-inst").disabled = full;
-  $("add-drum").disabled = full;
-}
-
-let lastPattern = 0;   // 最後に選んだリズムの型
-
-// ドラムトラックを編集しているときだけ、パッド16個とリズムの型を出す
-function renderPads() {
-  const track = state.tracks[state.current];
-  const box = $("pads");
-  box.hidden = !isDrum(track);
-  if (box.hidden) return;
-  let html = '<p class="pads-title">パッド<span>クリックで鳴る・音声ファイルをドロップで差し替え</span></p><div class="pad-grid">';
-  DRUM_PADS.forEach((p, i) => {
-    const custom = track.custom && track.custom[i];
-    html += '<button class="pad' + (i === state.pad ? " selected" : "") + (custom ? " custom" : "") + '" data-pad="' + i + '" title="' + esc(padName(track, i)) + '">' + esc(padName(track, i)) + "</button>";
-  });
-  html += "</div>";
-  const custom = track.custom && track.custom[state.pad];
-  html +=
-    '<div class="pad-load">' +
-      '<p>選んだパッド：<b>' + esc(padName(track, state.pad)) + "</b></p>" +
-      '<button data-action="load">自分の音を読み込む</button>' +
-      (custom ? '<button data-action="reset">元の音に戻す</button>' : "") +
-    "</div>" +
-    '<div class="pad-pattern"><select id="pattern" aria-label="リズムの型">' +
-      DRUM_PATTERNS.map((p, k) => '<option value="' + k + '"' + (k === lastPattern ? " selected" : "") + ">" + p.name + "</option>").join("") +
-    '</select><button data-action="pattern">型を入れる</button></div>';
-  box.innerHTML = html;
 }
 
 // 画質対策：canvas の中身の画素数を「見た目の大きさ × 画面の細かさ」にそろえる
@@ -1446,22 +1100,15 @@ function clampView() {
   view.unitW = Math.min(MAX_UNIT_W, Math.max(minUnitW(), view.unitW));
   const maxX = TOTAL - (W - KEY_W) / view.unitW;
   view.x = Math.min(Math.max(0, maxX), Math.max(0, view.x));
-  const maxY = rowCount() * ROW_H - (H - RULER_H);
+  const maxY = (TOP - BOTTOM + 1) * ROW_H - (H - RULER_H);
   view.y = Math.min(Math.max(0, maxY), Math.max(0, view.y));
 }
 
-// 行の並び：楽器トラックは上が高い音（C7 〜 C2）、ドラムトラックは上からパッド 0〜15
-const drumView = () => isDrum(state.tracks[state.current]);
-const rowCount = () => (drumView() ? DRUM_PADS.length : TOP - BOTTOM + 1);
-const pitchRange = () => (drumView() ? [0, DRUM_PADS.length - 1] : [BOTTOM, TOP]);
-const rowToPitch = (row) => (drumView() ? row : TOP - row);
-const pitchToRow = (p) => (drumView() ? p : TOP - p);
-
 // 時間・音の高さ ⇔ 画面の位置
 const timeToX = (t) => KEY_W + (t - view.x) * view.unitW;
-const pitchToY = (p) => RULER_H + pitchToRow(p) * ROW_H - view.y;
+const pitchToY = (p) => RULER_H + (TOP - p) * ROW_H - view.y;
 const unitAt = (x) => view.x + (x - KEY_W) / view.unitW;
-const pitchAt = (y) => rowToPitch(Math.floor((y - RULER_H + view.y) / ROW_H));
+const pitchAt = (y) => TOP - Math.floor((y - RULER_H + view.y) / ROW_H);
 const snapFloor = (u) => Math.floor(u / state.grid) * state.grid;   // 左のグリッド線に合わせる
 const snapRound = (u) => Math.round(u / state.grid) * state.grid;   // 近い方のグリッド線に合わせる
 
@@ -1480,7 +1127,7 @@ function drawNotes(track, alpha, isCurrent) {
       ctx.lineWidth = 2;
       ctx.stroke();
     }
-    if (w > 30 && isCurrent && !isDrum(track)) {
+    if (w > 30 && isCurrent) {
       ctx.fillStyle = "#1a1408";
       ctx.fillText(NAMES[n.pitch % 12], x + 4, y + 13);
     }
@@ -1491,7 +1138,7 @@ function drawNotes(track, alpha, isCurrent) {
 function drawRoll() {
   if (!resizeCanvas()) return;
   ctx.clearRect(0, 0, W, H);
-  const scale = scalePcs();
+  const scale = SCALES[state.scale];
   const firstRow = Math.floor(view.y / ROW_H);
   const lastRow = Math.ceil((view.y + H - RULER_H) / ROW_H);
 
@@ -1501,25 +1148,19 @@ function drawRoll() {
   ctx.rect(KEY_W, RULER_H, W - KEY_W, H - RULER_H);
   ctx.clip();
 
-  const drums = drumView();
-  const rows = rowCount();
-
-  // 行：白鍵は少し明るく、スケールの音は青っぽく（ドラムは1行おきに色を変えるだけ）
-  for (let row = firstRow; row <= lastRow && row < rows; row++) {
-    const p = rowToPitch(row);
-    if (drums) {
-      ctx.fillStyle = row % 2 ? "#26282d" : "#2c2e34";
-    } else {
-      const pc = p % 12;
-      const black = BLACK.includes(pc);
-      const inScale = scale.includes(pc);
-      ctx.fillStyle = inScale ? (black ? "#262c38" : "#313949") : (black ? "#1f2024" : "#2a2c31");
-    }
+  // 行：白鍵は少し明るく、スケールの音は青っぽく
+  for (let row = firstRow; row <= lastRow; row++) {
+    const p = TOP - row;
+    if (p < BOTTOM) break;
+    const pc = p % 12;
+    const black = BLACK.includes(pc);
+    const inScale = scale.includes(pc);
+    ctx.fillStyle = inScale ? (black ? "#262c38" : "#313949") : (black ? "#1f2024" : "#2a2c31");
     ctx.fillRect(KEY_W, pitchToY(p), W - KEY_W, ROW_H - 1);
   }
 
-  // コードの音の行を光らせる（ルート音は黄色、ほかの音は緑）。ドラムのときは光らせない
-  if (state.highlight && !drums) {
+  // コードの音の行を光らせる（ルート音は黄色、ほかの音は緑）
+  if (state.highlight) {
     for (let bar = 0; bar < 8; bar++) {
       const hl = highlightForBar(bar);
       if (!hl) continue;
@@ -1549,9 +1190,9 @@ function drawRoll() {
     ctx.fillRect(Math.round(timeToX(t)), RULER_H, 1, H - RULER_H);
   }
 
-  // 音：ほかのトラックは薄く、編集中のトラックははっきり（楽器とドラムは行の並びが違うので、同じ種類だけ重ねる）
+  // 音：ほかのトラックは薄く、編集中のトラックははっきり
   ctx.font = "11px sans-serif";
-  state.tracks.forEach((t, i) => { if (i !== state.current && isDrum(t) === drums) drawNotes(t, 0.3, false); });
+  state.tracks.forEach((t, i) => { if (i !== state.current) drawNotes(t, 0.3, false); });
   drawNotes(state.tracks[state.current], 1, true);
 
   // 範囲選択の四角
@@ -1577,18 +1218,7 @@ function drawRoll() {
   ctx.beginPath();
   ctx.rect(0, RULER_H, KEY_W, H - RULER_H);
   ctx.clip();
-  // ドラム：パッドの名前を並べる
-  if (drums) {
-    const track = state.tracks[state.current];
-    for (let row = firstRow; row <= lastRow && row < rows; row++) {
-      const y = pitchToY(row);
-      ctx.fillStyle = row === state.pad ? "#f2a541" : "#d9d9de";
-      ctx.fillRect(0, y, KEY_W - 1, ROW_H - 1);
-      ctx.fillStyle = "#1d1d1f";
-      ctx.fillText(padName(track, row).slice(0, 7), 6, y + 14);
-    }
-  }
-  for (let row = firstRow; row <= lastRow && !drums; row++) {
+  for (let row = firstRow; row <= lastRow; row++) {
     const p = TOP - row;
     if (p < BOTTOM) break;
     const pc = p % 12;
@@ -1696,15 +1326,14 @@ $("toc").addEventListener("click", (e) => {
 });
 
 // クイズの選択肢・もう一度ボタン（本文は作り直されるので、外側の箱で受け取る）
-function onQuizClick(e) {
+$("lesson").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-quiz]");
   if (!b) return;
   const key = b.dataset.step + "-" + b.dataset.quiz;
   if (b.dataset.retry) delete state.answers[key];
   else state.answers[key] = Number(b.dataset.choice);
   renderExplain();
-}
-$("lesson").addEventListener("click", onQuizClick);
+});
 
 $("grid").addEventListener("change", (e) => {
   state.grid = Number(e.target.value);
@@ -1713,16 +1342,12 @@ $("grid").addEventListener("change", (e) => {
   render();
 });
 $("hl").addEventListener("change", (e) => { e.target.blur(); setHighlight(e.target.value); });
-// キー・スケールを変えたら、ピアノロールの色・コードを光らせる・早見表・コードパッドを全部作り直す
-function onKeyChange(e) {
-  if (e.target.id === "key") state.key = Number(e.target.value);
-  else state.scale = e.target.value;
+$("scale").addEventListener("change", (e) => {
+  state.scale = e.target.value;
   e.target.blur();
   render();
-  if (state.panel === "chart") renderExplain();
-}
-$("key").addEventListener("change", onKeyChange);
-$("scale").addEventListener("change", onKeyChange);
+  if (state.panel === "chart") renderExplain();   // 早見表もキーに合わせて変える
+});
 $("clear").addEventListener("click", () => {
   pushHistory();
   state.tracks[state.current].notes = [];
@@ -1755,35 +1380,17 @@ $("tracks").addEventListener("click", (e) => {
   if (!btn || !item) return;
   const i = Number(item.dataset.index);
   const t = state.tracks[i];
-  const action = btn.dataset.action;
-  if (action === "remove") { removeTrack(i); return; }
-  if (action === "select") {
-    // 2回続けて押したら名前を変える（1回目で一覧が作り直されるので、dblclick ではなく回数で見る）
-    if (e.detail === 2) {
-      const name = prompt("トラックの名前", t.name);
-      if (name && name.trim()) t.name = name.trim().slice(0, 12);
-      render();
-    } else {
-      selectTrack(i);
-    }
-    return;
+  if (btn.dataset.action === "mute") t.mute = !t.mute;
+  if (btn.dataset.action === "solo") t.solo = !t.solo;
+  if (btn.dataset.action === "select" && state.current !== i) {
+    state.current = i;
+    state.selected.clear();   // 選択は編集中のトラックの音だけ
   }
-  if (action === "mute") t.mute = !t.mute;
-  if (action === "solo") t.solo = !t.solo;
   render();
-});
-
-// 音量のつまみ：動かしている間は作り直さず、数字と音量だけ変える
-$("tracks").addEventListener("input", (e) => {
-  if (!e.target.classList.contains("vol-range")) return;
-  const t = state.tracks[Number(e.target.closest(".track").dataset.index)];
-  setVolume(t, Number(e.target.value));
-  e.target.nextElementSibling.textContent = e.target.value;
 });
 
 // 音色を変えたら、その音色で試しに鳴らす（メロディは1音、コードは和音）
 $("tracks").addEventListener("change", (e) => {
-  if (e.target.classList.contains("vol-range")) { e.target.blur(); return; }
   if (!e.target.classList.contains("inst")) return;
   const i = Number(e.target.closest(".track").dataset.index);
   const t = state.tracks[i];
@@ -1792,113 +1399,9 @@ $("tracks").addEventListener("change", (e) => {
   audio.resume();
   const now = audio.currentTime + 0.02;
   const pitches = i === 0 ? [72] : [60, 64, 67];
-  for (const p of pitches) playNote(p, 0, 100, now, 0.6, t.instrument, busFor(t));
+  for (const p of pitches) playNote(p, 0, 100, now, 0.6, t.instrument);
   e.target.blur();   // スペースキーで再生できるように、選択欄から外す
   render();
-});
-
-$("add-inst").addEventListener("click", () => addTrack("inst"));
-$("add-drum").addEventListener("click", () => addTrack("drum"));
-
-// ---------- パッド ----------
-// パッドを押す：鳴らして、そのパッドを選ぶ（ピアノロールの行も光る）
-$("pads").addEventListener("click", (e) => {
-  const track = state.tracks[state.current];
-  const pad = e.target.closest(".pad");
-  if (pad) {
-    state.pad = Number(pad.dataset.pad);
-    preview(state.pad);
-    render();
-    return;
-  }
-  const btn = e.target.closest("button");
-  if (!btn) return;
-  if (btn.dataset.action === "load") $("pad-file").click();
-  if (btn.dataset.action === "reset") { delete track.custom[state.pad]; preview(state.pad); render(); }
-  if (btn.dataset.action === "pattern") insertDrumPattern(lastPattern);
-});
-$("pads").addEventListener("change", (e) => {
-  if (e.target.id === "pattern") { lastPattern = Number(e.target.value); e.target.blur(); }
-});
-
-// ---------- コードパッド ----------
-// コードを鳴らす（編集中のトラックの音色で）
-function playChord(c) {
-  initAudio();
-  audio.resume();
-  const track = state.tracks[state.current];
-  const now = audio.currentTime + 0.02;
-  const pitches = state.chartBass ? [c.bass, ...c.notes] : c.notes;
-  for (const p of pitches) playNote(p, 0, 100, now, 0.8, track.instrument, busFor(track));
-}
-
-$("chordpads").addEventListener("click", (e) => {
-  const track = chordPadTrack();
-  if (!track) return;
-  const pad = e.target.closest(".chord-pad");
-  if (pad) {
-    const deg = Number(pad.dataset.deg);
-    playChord(chordInKey(deg, undefined, state.chord7));
-    if (state.chordSeq.length < 8) state.chordSeq.push({ deg, seventh: state.chord7 });
-    renderChordPads();
-    return;
-  }
-  const chip = e.target.closest(".seq-chip");
-  if (chip) { state.chordSeq.splice(Number(chip.dataset.seq), 1); renderChordPads(); return; }
-  const btn = e.target.closest("button");
-  if (!btn) return;
-  if (btn.dataset.action === "seq-insert") putChords(track, state.chordSeq.map((x) => chordInKey(x.deg, undefined, x.seventh)));
-  if (btn.dataset.action === "seq-clear") { state.chordSeq = []; renderChordPads(); }
-  if (btn.dataset.action === "rhythm") applyRhythm(track);
-});
-$("chordpads").addEventListener("change", (e) => {
-  if (e.target.id === "chord7") state.chord7 = e.target.checked;
-  if (e.target.id === "chord-bass") { state.chartBass = e.target.checked; if (state.panel === "chart") renderExplain(); }
-  if (e.target.id === "rhythm") state.rhythm = Number(e.target.value);
-  e.target.blur();
-  renderChordPads();
-});
-
-// ---------- 外の音をパッドに読み込む ----------
-// 音声ファイルを AudioBuffer にして、選んだパッドに入れる
-async function loadPadFile(file, pad) {
-  const track = state.tracks[state.current];
-  if (!isDrum(track) || !file) return;
-  initAudio();
-  try {
-    const buffer = await audio.decodeAudioData(await file.arrayBuffer());
-    if (!track.custom) track.custom = {};
-    track.custom[pad] = { buffer, name: file.name.replace(/\.[^.]+$/, "") };
-    state.pad = pad;
-    preview(pad);
-    render();
-  } catch (err) {
-    alert("この音声ファイルは読み込めませんでした。wav か mp3 を選んでください。");
-  }
-}
-
-// パッドの上に音声ファイルをドラッグ＆ドロップしても読み込める
-$("pads").addEventListener("dragover", (e) => {
-  const pad = e.target.closest(".pad");
-  if (!pad) return;
-  e.preventDefault();
-  document.querySelectorAll(".pad.drop").forEach((x) => x.classList.remove("drop"));
-  pad.classList.add("drop");
-});
-$("pads").addEventListener("dragleave", (e) => { const pad = e.target.closest(".pad"); if (pad) pad.classList.remove("drop"); });
-$("pads").addEventListener("drop", (e) => {
-  const pad = e.target.closest(".pad");
-  if (!pad) return;
-  e.preventDefault();
-  pad.classList.remove("drop");
-  loadPadFile(e.dataTransfer.files[0], Number(pad.dataset.pad));
-});
-
-// 自分の音（wav・mp3 など）を、選んだパッドに読み込む
-$("pad-file").addEventListener("change", async (e) => {
-  const file = e.target.files[0];
-  e.target.value = "";   // 同じファイルをもう一度選んでも読み込めるように
-  loadPadFile(file, state.pad);
 });
 
 // キーボード操作
@@ -1964,16 +1467,7 @@ canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
 canvas.addEventListener("pointerdown", (e) => {
   const { x, y } = posFromEvent(e);
-  if (y < RULER_H) return;                // 小節番号の上は無視
-  if (x < KEY_W) {                        // 鍵盤（ドラムはパッドの名前）を押すと、その音を鳴らす
-    const p = pitchAt(y);
-    const [lo, hi] = pitchRange();
-    if (e.button === 0 && p >= lo && p <= hi) {
-      preview(p);
-      if (drumView()) { state.pad = p; renderPads(); drawRoll(); }
-    }
-    return;
-  }
+  if (x < KEY_W || y < RULER_H) return;   // 鍵盤と小節番号の上は無視
   canvas.setPointerCapture(e.pointerId);  // canvas の外に出てもドラッグを追いかける
 
   // 右ボタン：範囲選択を始める
@@ -2004,8 +1498,7 @@ canvas.addEventListener("pointerdown", (e) => {
   } else {
     // 空いた所：新しい音を置いて、そのままドラッグで長さを決められるようにする
     const p = pitchAt(y), u = unitAt(x);
-    const [lo, hi] = pitchRange();
-    if (p < lo || p > hi || u >= TOTAL) return;
+    if (p < BOTTOM || u >= TOTAL) return;
     const start = snapFloor(u);
     const note = { pitch: p, start: start, length: Math.min(state.noteLength, TOTAL - start), velocity: 100 };
     currentNotes().push(note);
@@ -2067,9 +1560,8 @@ canvas.addEventListener("pointermove", (e) => {
     const maxEnd = Math.max(...drag.orig.map((o) => o.start + o.length));
     const minPitch = Math.min(...drag.orig.map((o) => o.pitch));
     const maxPitch = Math.max(...drag.orig.map((o) => o.pitch));
-    const [lo, hi] = pitchRange();
     dt = Math.max(-minStart, Math.min(TOTAL - maxEnd, dt));
-    dp = Math.max(lo - minPitch, Math.min(hi - maxPitch, dp));
+    dp = Math.max(BOTTOM - minPitch, Math.min(TOP - maxPitch, dp));
 
     const oldPitch = drag.grab.pitch;
     for (const o of drag.orig) {
