@@ -11,6 +11,10 @@
   <!-- 上のバー -->
   <header class="topbar">
     <h1>ゼロから8小節</h1>
+    <div class="switch book">
+      <button id="book-compose" class="active">作曲編</button>
+      <button id="book-arrange">編曲編</button>
+    </div>
     <div class="spacer"></div>
     <span class="label">表示</span>
     <div class="switch">
@@ -108,7 +112,9 @@
           <div id="tracks" class="tracks"></div>
           <div class="add-track">
             <button id="add-inst">＋ 楽器</button>
+            <button id="add-synth">＋ シンセ</button>
             <button id="add-drum">＋ ドラム</button>
+            <button id="add-fx">＋ FX</button>
           </div>
           <!-- ドラムのパッド（ドラムトラックを選んでいるときだけ出る） -->
           <div id="pads" class="pads" hidden></div>
@@ -119,6 +125,8 @@
         <!-- ピアノロール -->
         <div class="roll-wrap">
           <canvas id="roll"></canvas>
+          <!-- シンセの編集画面（開いているときだけ、ピアノロールの上に重なる） -->
+          <div id="synth" class="synth" hidden></div>
         </div>
       </div>
 
@@ -138,12 +146,16 @@
     function lesson(text) { LESSON_SOURCES.push(text); }
     const GLOSSARY = [];
     function term(names, text) { GLOSSARY.push({ names: names.split("|").map((s) => s.trim()), text: text }); }
+    const ARRANGE_SOURCES = [];
+    function arrange(text) { ARRANGE_SOURCES.push(text); }
     const QOL_SOURCES = [];
     function qol(text) { QOL_SOURCES.push(text); }
   </script>
   <script src="lessons.js"></script>
+  <script src="arrange.js"></script>
   <script src="glossary.js"></script>
   <script src="qol.js"></script>
+  <script src="synth.js"></script>
   <script src="main.js"></script>
 </body>
 </html>

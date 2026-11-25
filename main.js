@@ -3,6 +3,7 @@
 // ================================================
 const state = {
   mode: "split",   // "split"（分割）か "tab"（タブ）
+  book: "compose", // 説明の本："compose"（作曲編）か "arrange"（編曲編）
   tab: "daw",      // タブ表示のとき見せる方："explain" か "daw"
   step: 0,         // 今のステップ番号
   panel: "lesson", // 説明パネルに出すもの："lesson"（本文）／"toc"（目次）／"glossary"（用語）／"chart"（早見表）／"qol"（便利な機能）
@@ -26,6 +27,8 @@ const state = {
     { name: "コード",   type: "inst", color: "#7aa7e8", mute: false, solo: false, volume: 80, instrument: "piano", notes: [], fixed: true }
   ],
   pad: 0,               // ドラムのパッド画面で選んでいるパッドの番号
+  synthOpen: null,      // シンセの編集画面を開いているトラックの番号（閉じていれば null）
+  bassPattern: 0,       // 「ベースを入れる」のリズムの型
   chordSeq: [],         // コードパッドで選んだコードの並び（{ deg, seventh }）
   chord7: false,        // コードパッドを7thコードにするか
   rhythm: 0,            // コードのリズムの型（CHORD_RHYTHMS の番号）
@@ -105,7 +108,8 @@ function initAudio() {
   master = audio.createGain();
   master.gain.value = 0.35;
   master.connect(audio.destination);
-  DRUM_BUFFERS = DRUM_PADS.map((pad) => makeBuffer(pad.dur, pad.gen));   // ドラムの音を作っておく
+  DRUM_BUFFERS = DRUM_PADS.map((pad) => makeBuffer(pad.dur, pad.gen, pad.hp, pad.lp));   // ドラムの音を作っておく
+  makeFxBuffers();
 }
 
 // ---------- トラックごとの音量 ----------
@@ -127,6 +131,8 @@ function setVolume(track, v) {
   if (audio && buses.has(track)) buses.get(track).gain.setTargetAtTime(volToGain(v), audio.currentTime, 0.02);
 }
 const isDrum = (track) => track && track.type === "drum";
+const isFx = (track) => track && track.type === "fx";
+const isPadTrack = (track) => isDrum(track) || isFx(track);   // 行が「パッドの名前」になるトラック
 
 const unitSec = () => 60 / state.bpm / 12;          // 48分1つぶんの秒数（1拍 = 12）
 const midiToFreq = (p) => 440 * Math.pow(2, (p - 69) / 12);
@@ -267,15 +273,14 @@ const DRUM_PADS = [
 let DRUM_BUFFERS = null;   // 作ったパッドの音（AudioBuffer）。最初に音を鳴らすときに作る
 
 // 1つのパッドの音を作る：計算 → フィルター → 大きさをそろえる
-function makeBuffer(dur, gen) {
+function makeBuffer(dur, gen, hp, lp) {
   const sr = audio.sampleRate;
   const buf = audio.createBuffer(1, Math.ceil(dur * sr), sr);
   const data = buf.getChannelData(0);
-  const pad = DRUM_PADS.find((p) => p.gen === gen);
   const f = gen({ ph: 0 });
   for (let i = 0; i < data.length; i++) data[i] = f(i / sr, i, sr);
-  if (pad && pad.hp) highpass(data, pad.hp, sr);
-  if (pad && pad.lp) lowpass(data, pad.lp, sr);
+  if (hp) highpass(data, hp, sr);
+  if (lp) lowpass(data, lp, sr);
   let peak = 0;
   for (let i = 0; i < data.length; i++) peak = Math.max(peak, Math.abs(data[i]));
   const k = peak > 0 ? 0.9 / peak : 1;
@@ -289,7 +294,132 @@ function makeBuffer(dur, gen) {
 
 // そのトラックのパッドの音（自分で読み込んだ音があればそちら）
 const padBuffer = (track, pad) => (track.custom && track.custom[pad] ? track.custom[pad].buffer : DRUM_BUFFERS[pad]);
-const padName = (track, pad) => (track.custom && track.custom[pad] ? track.custom[pad].name : DRUM_PADS[pad].name);
+const padName = (track, pad) => {
+  if (isFx(track)) return FX_LIST[pad].name;
+  return track.custom && track.custom[pad] ? track.custom[pad].name : DRUM_PADS[pad].name;
+};
+
+// ================================================
+// FX（効果音）
+// ================================================
+// 置いた音の長さに合わせて鳴るもの（ライザーなど）と、決まった長さのもの（インパクトなど）がある
+let FX_BUFFERS = {};
+function makeFxBuffers() {
+  FX_BUFFERS.impact = makeBuffer(2.6, (s) => (t, i, sr) =>
+    Math.tanh(1.4 * sweep(s, t, 110, 34, 0.12, sr) * Math.exp(-t / 0.7)) * 0.9 + noise() * Math.exp(-t / 0.18) * 0.5, 0, 6000);
+  FX_BUFFERS.subdrop = makeBuffer(2.2, (s) => (t, i, sr) => sweep(s, t, 95, 28, 0.5, sr) * Math.exp(-t / 0.9));
+  // 逆再生シンバル：クラッシュの音を後ろから並べ直す
+  const crash = DRUM_BUFFERS[5];
+  const rev = audio.createBuffer(1, crash.length, crash.sampleRate);
+  const a = crash.getChannelData(0), b = rev.getChannelData(0);
+  for (let i = 0; i < a.length; i++) b[i] = a[a.length - 1 - i];
+  FX_BUFFERS.reverse = rev;
+  FX_BUFFERS.noise = makeBuffer(2, () => () => noise());
+}
+
+// バッファの音を鳴らす。endAt を渡すと、その時刻にちょうど鳴り終わるように始める（逆再生シンバル用）
+function playBuffer(track, buf, velocity, time, endAt) {
+  const src = audio.createBufferSource();
+  src.buffer = buf;
+  const g = audio.createGain();
+  g.gain.value = 0.9 * (velocity / 127);
+  src.connect(g).connect(busFor(track));
+  if (endAt !== undefined) {
+    const len = endAt - time;
+    const offset = Math.max(0, buf.duration - len);
+    src.start(time, offset);
+  } else {
+    src.start(time);
+  }
+  player.voices.push({ g, oscs: [src], end: time + buf.duration });
+}
+
+// 長さに合わせて鳴るノイズ（ライザー・ダウンリフター）
+function playNoiseSweep(track, velocity, time, dur, up) {
+  const src = audio.createBufferSource();
+  src.buffer = FX_BUFFERS.noise;
+  src.loop = true;
+  const f = audio.createBiquadFilter();
+  f.type = up ? "bandpass" : "lowpass";
+  f.Q.value = up ? 1.2 : 0.7;
+  f.frequency.setValueAtTime(up ? 300 : 12000, time);
+  f.frequency.exponentialRampToValueAtTime(up ? 9000 : 250, time + dur);
+  const g = audio.createGain();
+  const v = 0.8 * (velocity / 127);
+  g.gain.setValueAtTime(up ? 0.02 : v, time);
+  g.gain.linearRampToValueAtTime(up ? v : 0.001, time + dur);
+  g.gain.setTargetAtTime(0, time + dur, 0.02);
+  src.connect(f).connect(g).connect(busFor(track));
+  src.start(time);
+  src.stop(time + dur + 0.2);
+  player.voices.push({ g, oscs: [src], end: time + dur + 0.2 });
+}
+
+// 高さが上がっていくシンセ音（アップスウィープ）
+function playSweep(track, velocity, time, dur) {
+  const o = audio.createOscillator();
+  o.type = "sawtooth";
+  o.frequency.setValueAtTime(150, time);
+  o.frequency.exponentialRampToValueAtTime(2400, time + dur);
+  const f = audio.createBiquadFilter();
+  f.frequency.setValueAtTime(600, time);
+  f.frequency.exponentialRampToValueAtTime(8000, time + dur);
+  const g = audio.createGain();
+  g.gain.setValueAtTime(0.01, time);
+  g.gain.linearRampToValueAtTime(0.35 * (velocity / 127), time + dur);
+  g.gain.setTargetAtTime(0, time + dur, 0.03);
+  o.connect(f).connect(g).connect(busFor(track));
+  o.start(time);
+  o.stop(time + dur + 0.3);
+  player.voices.push({ g, oscs: [o], end: time + dur + 0.3 });
+}
+
+// キラキラ：置いた長さの間、スケールの高い音を16分ごとにランダムに鳴らす
+function playSparkle(track, velocity, time, dur) {
+  const pcs = scalePcs();
+  const step = unitSec() * 3;
+  const count = Math.max(1, Math.min(48, Math.round(dur / step)));
+  for (let k = 0; k < count; k++) {
+    const t = time + k * step;
+    const pitch = 84 + pcs[Math.floor(Math.random() * pcs.length)] + (Math.random() < 0.4 ? 12 : 0);
+    const f = midiToFreq(pitch);
+    const g = audio.createGain();
+    const v = 0.18 * (velocity / 127) * (0.5 + Math.random() * 0.5);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(v, t + 0.003);
+    g.gain.setTargetAtTime(0, t + 0.003, 0.12);
+    const pan = audio.createStereoPanner();
+    pan.pan.value = Math.random() * 1.6 - 0.8;
+    g.connect(pan).connect(busFor(track));
+    const oscs = [1, 2.76].map((m, j) => {
+      const o = audio.createOscillator();
+      o.frequency.value = f * m;
+      const og = audio.createGain();
+      og.gain.value = j ? 0.3 : 1;
+      o.connect(og).connect(g);
+      o.start(t);
+      o.stop(t + 0.8);
+      return o;
+    });
+    player.voices.push({ g, oscs, end: t + 0.8 });
+  }
+}
+
+// FX の一覧。fit：置いた音の長さに合わせて鳴るか
+const FX_LIST = [
+  { name: "インパクト", memo: "「ドーン」。サビやドロップの頭に", play: (tr, v, t) => playBuffer(tr, FX_BUFFERS.impact, v, t) },
+  { name: "クラッシュ", memo: "「シャーン」。区切りの頭に", play: (tr, v, t) => playBuffer(tr, DRUM_BUFFERS[5], v, t) },
+  { name: "逆シンバル", memo: "「フワァッ」と吸い込む。音の終わりが次の頭に来るように置く", fit: true, play: (tr, v, t, d) => playBuffer(tr, FX_BUFFERS.reverse, v, t, t + d) },
+  { name: "ライザー", memo: "「シュワー」と上がる。盛り上がる前の1〜2小節に長く置く", fit: true, play: (tr, v, t, d) => playNoiseSweep(tr, v, t, d, true) },
+  { name: "ダウンリフター", memo: "「シュー」と下がる。サビの頭から1〜2小節に長く置く", fit: true, play: (tr, v, t, d) => playNoiseSweep(tr, v, t, d, false) },
+  { name: "アップスウィープ", memo: "「ヒューン」と高さが上がる。ライザーと重ねても", fit: true, play: (tr, v, t, d) => playSweep(tr, v, t, d) },
+  { name: "キラキラ", memo: "置いた長さの間、高い音がキラキラ鳴る", fit: true, play: (tr, v, t, d) => playSparkle(tr, v, t, d) },
+  { name: "サブドロップ", memo: "「ブゥーン」と低く沈む。ドロップの頭に", play: (tr, v, t) => playBuffer(tr, FX_BUFFERS.subdrop, v, t) }
+];
+function playFx(track, i, velocity, time, durSec) {
+  const fx = FX_LIST[i];
+  if (fx) fx.play(track, velocity, time, Math.max(0.1, durSec));
+}
 
 // パッドを1回鳴らす
 function playDrum(track, pad, velocity, time) {
@@ -333,8 +463,16 @@ function preview(pitch) {
   initAudio();
   audio.resume();
   const track = state.tracks[state.current];
-  if (isDrum(track)) playDrum(track, pitch, 110, audio.currentTime);
-  else playNote(pitch, 6, 100, audio.currentTime, undefined, track.instrument, busFor(track));
+  const now = audio.currentTime;
+  if (isDrum(track)) playDrum(track, pitch, 110, now);
+  else if (isFx(track)) playFx(track, pitch, 110, now, BAR * unitSec());
+  else playTrackNote(track, pitch, 6, 100, now);
+}
+
+// 楽器トラックの1音（音色が「シンセ」なら自分で作った音、それ以外は用意した音色）
+function playTrackNote(track, pitch, lengthUnits, velocity, time, durSec) {
+  if (track.instrument === "synth" && track.synth) playSynth(track, pitch, lengthUnits, velocity, time, durSec);
+  else playNote(pitch, lengthUnits, velocity, time, durSec, track.instrument, busFor(track));
 }
 
 // 少し先（0.1秒ぶん）までの音を予約しておく。25ミリ秒ごとに呼ばれる
@@ -352,7 +490,8 @@ function schedule() {
       for (const n of track.notes) {
         if (n.start !== player.nextUnit) continue;
         if (isDrum(track)) playDrum(track, n.pitch, n.velocity, t);
-        else playNote(n.pitch, n.length, n.velocity, t, undefined, track.instrument, busFor(track));
+        else if (isFx(track)) playFx(track, n.pitch, n.velocity, t, n.length * unitSec());
+        else playTrackNote(track, n.pitch, n.length, n.velocity, t);
       }
     }
     player.nextUnit++;
@@ -366,6 +505,7 @@ function startPlay() {
   player.startTime = audio.currentTime + 0.05;
   player.nextUnit = 0;
   state.playing = true;
+  resyncSynths(player.startTime);   // ウォブルの揺れを小節の頭にそろえる
   schedule();
   player.timer = setInterval(schedule, 25);
   requestAnimationFrame(tick);
@@ -426,13 +566,16 @@ function addTrack(type) {
   if (state.tracks.length >= MAX_TRACKS) return;
   const used = state.tracks.map((t) => t.color);
   const color = TRACK_COLORS.find((c) => !used.includes(c)) || TRACK_COLORS[0];
-  const base = type === "drum" ? "ドラム" : "楽器";
+  const base = { drum: "ドラム", fx: "FX", synth: "シンセ" }[type] || "楽器";
   let name = base, k = 2;
   while (state.tracks.some((t) => t.name === name)) name = base + (k++);
-  state.tracks.push({ name, type, color, mute: false, solo: false, volume: 80, instrument: "piano", notes: [], custom: {} });
+  const synth = type === "synth";
+  state.tracks.push({ name, type: synth ? "inst" : type, color, mute: false, solo: false, volume: 80,
+                      instrument: synth ? "synth" : "piano", synth: synth ? defaultSynth() : undefined, notes: [], custom: {} });
   history.undo = [];
   history.redo = [];
   selectTrack(state.tracks.length - 1);
+  if (synth) { state.synthOpen = state.tracks.length - 1; render(); }
 }
 
 function removeTrack(i) {
@@ -441,6 +584,7 @@ function removeTrack(i) {
   if (t.notes.length > 0 && !confirm("「" + t.name + "」を消しますか？ 中の音も全部消えます。")) return;
   if (audio && buses.has(t)) buses.get(t).disconnect();
   state.tracks.splice(i, 1);
+  state.synthOpen = null;
   history.undo = [];
   history.redo = [];
   selectTrack(Math.min(state.current, state.tracks.length - 1));
@@ -448,14 +592,15 @@ function removeTrack(i) {
 
 // 編集するトラックを変える。楽器 ⇔ ドラムで行の並びが変わるので、縦のスクロール位置はそれぞれ覚えておく
 function selectTrack(i) {
-  const before = isDrum(state.tracks[state.current]);
+  const before = state.tracks[state.current] ? state.tracks[state.current].type : "inst";
   if (state.current !== i) state.selected.clear();   // 選択は編集中のトラックの音だけ
   state.current = i;
-  const after = isDrum(state.tracks[i]);
+  const after = state.tracks[i].type;
   if (before !== after) {
-    view[before ? "yDrum" : "yInst"] = view.y;
-    view.y = view[after ? "yDrum" : "yInst"] || 0;
+    view["y_" + before] = view.y;
+    view.y = view["y_" + after] || 0;
   }
+  if (state.synthOpen !== null && state.synthOpen !== i) state.synthOpen = state.tracks[i].instrument === "synth" && !isPadTrack(state.tracks[i]) ? i : null;
   render();
 }
 
@@ -895,12 +1040,15 @@ function orderHtml(k) {
   return html + "</div>";
 }
 
+// クイズの答えを覚える名前（本ごとに分ける）
+const ansKey = (stepIndex, qi) => state.book + ":" + stepIndex + "-" + qi;
+
 // クイズ1つ分の HTML（答えたかどうかで見た目が変わる）
 // stepIndex は steps の番号（並べ替えても変わらない番号）。答えもこの番号で覚える
 // page を渡すと、steps 以外のページ（ジャンル別など）のクイズも出せる
 function quizHtml(stepIndex, qi, page) {
   const q = (page || steps[stepIndex]).quizzes[qi];
-  const ans = state.answers[stepIndex + "-" + qi];
+  const ans = state.answers[ansKey(stepIndex, qi)];
   const answered = ans !== undefined;
   const attrs = ' data-step="' + stepIndex + '" data-quiz="' + qi + '"';
 
@@ -929,7 +1077,7 @@ function quizCount(stepIndex) {
   steps[stepIndex].quizzes.forEach((q, qi) => {
     if (!isVisible(q.only)) return;
     total++;
-    const a = state.answers[stepIndex + "-" + qi];
+    const a = state.answers[ansKey(stepIndex, qi)];
     if (a !== undefined && q.choices[a].correct) ok++;
   });
   return { total, ok };
@@ -1288,10 +1436,38 @@ function applyRhythm(track) {
   render();
 }
 
+// ---------- ベース ----------
+// 1小節の中で、ルート音を鳴らす [位置, 長さ]。"chord" はコードのリズムと同じにする
+const BASS_PATTERNS = [
+  { name: "1つ打ち（のばす）", hits: [[0, 48]] },
+  { name: "4分で刻む", hits: [[0, 12], [12, 12], [24, 12], [36, 12]] },
+  { name: "8分で刻む", hits: [0, 6, 12, 18, 24, 30, 36, 42].map((t) => [t, 6]) },
+  { name: "裏拍（キックとずらす）", hits: [6, 18, 30, 42].map((t) => [t, 6]) },
+  { name: "コードのリズムと同じ", hits: "chord" }
+];
+
+// コードトラックの小節ごとに一番低い音を探し、その音を C2〜B2 の高さにしてベースにする
+function insertBass(track) {
+  const pat = BASS_PATTERNS[state.bassPattern];
+  const hits = pat.hits === "chord" ? CHORD_RHYTHMS[state.rhythm].hits : pat.hits;
+  pushHistory();
+  const notes = [];
+  for (let bar = 0; bar < 8; bar++) {
+    const s0 = bar * BAR, e0 = s0 + BAR;
+    const inBar = state.tracks[1].notes.filter((n) => n.start < e0 && n.start + n.length > s0);
+    if (!inBar.length) continue;
+    const root = Math.min(...inBar.map((n) => n.pitch)) % 12;
+    for (const [t, len] of hits) notes.push({ pitch: 36 + root, start: s0 + t, length: len, velocity: 100 });
+  }
+  track.notes = notes;
+  state.selected.clear();
+  render();
+}
+
 // コードパッドを出すトラック：メロディ以外の楽器トラック
 const chordPadTrack = () => {
   const t = state.tracks[state.current];
-  return !isDrum(t) && state.current !== 0 ? t : null;
+  return !isPadTrack(t) && state.current !== 0 ? t : null;
 };
 
 function renderChordPads() {
@@ -1321,13 +1497,50 @@ function renderChordPads() {
     '<button data-action="seq-clear"' + (state.chordSeq.length ? "" : " disabled") + ">並びを消す</button>" +
     '<button data-action="rhythm"' + (track.notes.length ? "" : " disabled") + ">今のコードのリズムだけ変える</button>" +
     "</div>";
+  // ベース：コードトラックのルート音から作る（コードトラック以外を選んでいるとき）
+  if (state.current !== 1) {
+    html += '<p class="pads-title bass-title">ベースを作る<span>コードトラックのルート音から</span></p>' +
+      '<label class="rhythm">リズム<select id="bass-pattern">' +
+      BASS_PATTERNS.map((b, k) => '<option value="' + k + '"' + (k === state.bassPattern ? " selected" : "") + ">" + b.name + "</option>").join("") + "</select></label>" +
+      '<div class="pad-load"><button data-action="bass"' + (state.tracks[1].notes.length ? "" : " disabled") + ">このトラックにベースを入れる</button></div>";
+  }
   box.innerHTML = html;
 }
 
 // 説明のステップ：lessons.js に書いた文章を読み込んで作る
 // （上の関数や決まりごとを全部書き終わってから実行する）
-const steps = LESSON_SOURCES.map((src, i) => parseLesson(src, i));
+// 作曲編（lessons.js）と編曲編（arrange.js）は別々の本として読み込み、上のボタンで切り替える
+// :::order・目次・クイズの答えは、本ごとに別々に覚える
+function buildBook(sources, prefix) {
+  ORDER_BLOCKS.length = 0;
+  const st = sources.map((src, i) => parseLesson(src, prefix + i));
+  return { steps: st, blocks: ORDER_BLOCKS.slice(), orderPick: {}, step: 0 };
+}
+const BOOKS = { compose: buildBook(LESSON_SOURCES, ""), arrange: buildBook(ARRANGE_SOURCES, "a") };
+let steps = BOOKS.compose.steps;
+ORDER_BLOCKS.length = 0;
+ORDER_BLOCKS.push(...BOOKS.compose.blocks);
+state.orderPick = BOOKS.compose.orderPick;
 let order = computeOrder();   // 表示する順番（steps の番号の並び）。コード先・メロ先などで変わる
+
+function switchBook(name) {
+  if (name === state.book || !BOOKS[name].steps.length) return;
+  BOOKS[state.book].step = state.step;
+  state.book = name;
+  const b = BOOKS[name];
+  steps = b.steps;
+  ORDER_BLOCKS.length = 0;
+  ORDER_BLOCKS.push(...b.blocks);
+  state.orderPick = b.orderPick;
+  order = computeOrder();
+  state.step = b.step;
+  state.panel = "lesson";
+  stopSound();
+  $("book-compose").classList.toggle("active", name === "compose");
+  $("book-arrange").classList.toggle("active", name === "arrange");
+  renderExplain();
+  $("lesson").scrollTop = 0;
+}
 // QOL（便利な機能）のページ：qol.js に書いた文章を、説明と同じ書き方で読み込む
 const QOL_PAGE = parseLesson(QOL_SOURCES.join("\n"), "qol");
 
@@ -1346,6 +1559,7 @@ function render() {
   renderTracks();
   renderPads();
   renderChordPads();
+  renderSynth();
   renderHlSelect();
   drawRoll();
 }
@@ -1364,12 +1578,16 @@ function renderTracks() {
     let kind;
     if (isDrum(t)) {
       kind = '<p class="kind">ドラム（パッド16個）</p>';
+    } else if (isFx(t)) {
+      kind = '<p class="kind">FX（効果音8個）</p>';
     } else {
       let options = "";
       for (const key in INSTRUMENTS) {
         options += '<option value="' + key + '"' + (key === t.instrument ? " selected" : "") + ">" + INSTRUMENTS[key].name + "</option>";
       }
+      options += '<option value="synth"' + (t.instrument === "synth" ? " selected" : "") + ">シンセ（自分で作る）</option>";
       kind = '<select class="inst" data-action="inst" aria-label="' + name + 'の音色">' + options + "</select>";
+      if (t.instrument === "synth") kind += '<button class="open-synth" data-action="synth">シンセを開く</button>';
     }
     html +=
       '<div class="' + cls.join(" ") + '" data-index="' + i + '">' +
@@ -1386,8 +1604,7 @@ function renderTracks() {
   });
   $("tracks").innerHTML = html;
   const full = state.tracks.length >= MAX_TRACKS;
-  $("add-inst").disabled = full;
-  $("add-drum").disabled = full;
+  for (const id of ["add-inst", "add-synth", "add-drum", "add-fx"]) $(id).disabled = full;
 }
 
 let lastPattern = 0;   // 最後に選んだリズムの型
@@ -1396,8 +1613,16 @@ let lastPattern = 0;   // 最後に選んだリズムの型
 function renderPads() {
   const track = state.tracks[state.current];
   const box = $("pads");
-  box.hidden = !isDrum(track);
+  box.hidden = !isPadTrack(track);
   if (box.hidden) return;
+  if (isFx(track)) {   // FX：一覧と使いどころだけ
+    let h = '<p class="pads-title">FX<span>クリックで鳴る</span></p><div class="pad-grid fx-grid">';
+    FX_LIST.forEach((f, i) => { h += '<button class="pad' + (i === state.pad ? " selected" : "") + '" data-pad="' + i + '">' + f.name + "</button>"; });
+    const f = FX_LIST[state.pad] || FX_LIST[0];
+    h += '</div><p class="fx-memo"><b>' + f.name + "</b>：" + f.memo + (f.fit ? "（置いた音の長さだけ鳴る）" : "") + "</p>";
+    box.innerHTML = h;
+    return;
+  }
   let html = '<p class="pads-title">パッド<span>クリックで鳴る・音声ファイルをドロップで差し替え</span></p><div class="pad-grid">';
   DRUM_PADS.forEach((p, i) => {
     const custom = track.custom && track.custom[i];
@@ -1451,9 +1676,10 @@ function clampView() {
 }
 
 // 行の並び：楽器トラックは上が高い音（C7 〜 C2）、ドラムトラックは上からパッド 0〜15
-const drumView = () => isDrum(state.tracks[state.current]);
-const rowCount = () => (drumView() ? DRUM_PADS.length : TOP - BOTTOM + 1);
-const pitchRange = () => (drumView() ? [0, DRUM_PADS.length - 1] : [BOTTOM, TOP]);
+const drumView = () => isPadTrack(state.tracks[state.current]);
+const padCount = () => (isFx(state.tracks[state.current]) ? FX_LIST.length : DRUM_PADS.length);
+const rowCount = () => (drumView() ? padCount() : TOP - BOTTOM + 1);
+const pitchRange = () => (drumView() ? [0, padCount() - 1] : [BOTTOM, TOP]);
 const rowToPitch = (row) => (drumView() ? row : TOP - row);
 const pitchToRow = (p) => (drumView() ? p : TOP - p);
 
@@ -1480,7 +1706,7 @@ function drawNotes(track, alpha, isCurrent) {
       ctx.lineWidth = 2;
       ctx.stroke();
     }
-    if (w > 30 && isCurrent && !isDrum(track)) {
+    if (w > 30 && isCurrent && !isPadTrack(track)) {
       ctx.fillStyle = "#1a1408";
       ctx.fillText(NAMES[n.pitch % 12], x + 4, y + 13);
     }
@@ -1551,7 +1777,8 @@ function drawRoll() {
 
   // 音：ほかのトラックは薄く、編集中のトラックははっきり（楽器とドラムは行の並びが違うので、同じ種類だけ重ねる）
   ctx.font = "11px sans-serif";
-  state.tracks.forEach((t, i) => { if (i !== state.current && isDrum(t) === drums) drawNotes(t, 0.3, false); });
+  const curType = state.tracks[state.current].type;
+  state.tracks.forEach((t, i) => { if (i !== state.current && t.type === curType) drawNotes(t, 0.3, false); });
   drawNotes(state.tracks[state.current], 1, true);
 
   // 範囲選択の四角
@@ -1585,7 +1812,10 @@ function drawRoll() {
       ctx.fillStyle = row === state.pad ? "#f2a541" : "#d9d9de";
       ctx.fillRect(0, y, KEY_W - 1, ROW_H - 1);
       ctx.fillStyle = "#1d1d1f";
-      ctx.fillText(padName(track, row).slice(0, 7), 6, y + 14);
+      const label = padName(track, row);
+      ctx.font = ctx.measureText(label).width > KEY_W - 10 ? "9px sans-serif" : "11px sans-serif";   // 長い名前は小さく
+      ctx.fillText(label, 6, y + 14);
+      ctx.font = "11px sans-serif";
     }
   }
   for (let row = firstRow; row <= lastRow && !drums; row++) {
@@ -1699,7 +1929,7 @@ $("toc").addEventListener("click", (e) => {
 function onQuizClick(e) {
   const b = e.target.closest("button[data-quiz]");
   if (!b) return;
-  const key = b.dataset.step + "-" + b.dataset.quiz;
+  const key = ansKey(b.dataset.step, b.dataset.quiz);
   if (b.dataset.retry) delete state.answers[key];
   else state.answers[key] = Number(b.dataset.choice);
   renderExplain();
@@ -1746,6 +1976,7 @@ $("bpm").addEventListener("change", (e) => {
   } else {
     state.bpm = bpm;
   }
+  if (audio) for (const t of state.tracks) { if (t.synth && synthChains.has(t)) chainFor(t).update(t.synth); }   // ディレイの間隔・ウォブルの速さもテンポに合わせる
 });
 
 // トラック一覧：ボタンが毎回作り直されるので、外側の箱で1回だけ受け取る
@@ -1757,6 +1988,7 @@ $("tracks").addEventListener("click", (e) => {
   const t = state.tracks[i];
   const action = btn.dataset.action;
   if (action === "remove") { removeTrack(i); return; }
+  if (action === "synth") { state.synthOpen = state.synthOpen === i ? null : i; if (state.current !== i) selectTrack(i); else render(); return; }
   if (action === "select") {
     // 2回続けて押したら名前を変える（1回目で一覧が作り直されるので、dblclick ではなく回数で見る）
     if (e.detail === 2) {
@@ -1788,17 +2020,26 @@ $("tracks").addEventListener("change", (e) => {
   const i = Number(e.target.closest(".track").dataset.index);
   const t = state.tracks[i];
   t.instrument = e.target.value;
+  if (t.instrument === "synth") {   // シンセを選んだら、編集画面を開く
+    if (!t.synth) t.synth = defaultSynth();
+    state.synthOpen = i;
+    if (state.current !== i) selectTrack(i);
+  } else if (state.synthOpen === i) {
+    state.synthOpen = null;
+  }
   initAudio();
   audio.resume();
   const now = audio.currentTime + 0.02;
   const pitches = i === 0 ? [72] : [60, 64, 67];
-  for (const p of pitches) playNote(p, 0, 100, now, 0.6, t.instrument, busFor(t));
+  for (const p of pitches) playTrackNote(t, p, 0, 100, now, 0.6);
   e.target.blur();   // スペースキーで再生できるように、選択欄から外す
   render();
 });
 
 $("add-inst").addEventListener("click", () => addTrack("inst"));
+$("add-synth").addEventListener("click", () => addTrack("synth"));
 $("add-drum").addEventListener("click", () => addTrack("drum"));
+$("add-fx").addEventListener("click", () => addTrack("fx"));
 
 // ---------- パッド ----------
 // パッドを押す：鳴らして、そのパッドを選ぶ（ピアノロールの行も光る）
@@ -1829,7 +2070,7 @@ function playChord(c) {
   const track = state.tracks[state.current];
   const now = audio.currentTime + 0.02;
   const pitches = state.chartBass ? [c.bass, ...c.notes] : c.notes;
-  for (const p of pitches) playNote(p, 0, 100, now, 0.8, track.instrument, busFor(track));
+  for (const p of pitches) playTrackNote(track, p, 0, 100, now, 0.8);
 }
 
 $("chordpads").addEventListener("click", (e) => {
@@ -1850,11 +2091,13 @@ $("chordpads").addEventListener("click", (e) => {
   if (btn.dataset.action === "seq-insert") putChords(track, state.chordSeq.map((x) => chordInKey(x.deg, undefined, x.seventh)));
   if (btn.dataset.action === "seq-clear") { state.chordSeq = []; renderChordPads(); }
   if (btn.dataset.action === "rhythm") applyRhythm(track);
+  if (btn.dataset.action === "bass") insertBass(track);
 });
 $("chordpads").addEventListener("change", (e) => {
   if (e.target.id === "chord7") state.chord7 = e.target.checked;
   if (e.target.id === "chord-bass") { state.chartBass = e.target.checked; if (state.panel === "chart") renderExplain(); }
   if (e.target.id === "rhythm") state.rhythm = Number(e.target.value);
+  if (e.target.id === "bass-pattern") state.bassPattern = Number(e.target.value);
   e.target.blur();
   renderChordPads();
 });
@@ -2140,5 +2383,9 @@ canvas.addEventListener("wheel", (e) => {
 new ResizeObserver(() => drawRoll()).observe(canvas);
 window.addEventListener("resize", () => drawRoll());
 
+initSynthUI();
+$("book-compose").addEventListener("click", () => switchBook("compose"));
+$("book-arrange").addEventListener("click", () => switchBook("arrange"));
+$("book-arrange").disabled = !BOOKS.arrange.steps.length;
 render();          // 最初の1回
 renderExplain();
