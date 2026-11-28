@@ -154,7 +154,7 @@ function distCurve(drive) {
 }
 
 // ---------- トラック1つぶんのエフェクトの列 ----------
-const synthChains = new WeakMap();
+let synthChains = new WeakMap();   // WAV の書き出しのときは、別の入れ物に入れかえる
 
 function chainFor(track) {
   let ch = synthChains.get(track);

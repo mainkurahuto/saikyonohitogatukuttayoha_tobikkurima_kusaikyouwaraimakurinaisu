@@ -2,6 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ゼロから8小節</title>
 <link rel="stylesheet" href="style.css">
 </head>
@@ -104,6 +105,23 @@
           <select id="hl"></select>
         </label>
         <button id="clear">このトラックを消す</button>
+        <label>ループ
+          <select id="loop-from" aria-label="ループの始まりの小節"></select>〜<select id="loop-to" aria-label="ループの終わりの小節"></select>小節
+        </label>
+        <button id="metronome" aria-pressed="false" title="1拍ごとに「カッ」と鳴らす（書き出しには入らない）">メトロノーム</button>
+        <button id="midi-in" title="MIDI キーボードをつなぐ">MIDI 鍵盤</button>
+        <details id="filemenu" class="filemenu">
+          <summary>ファイル</summary>
+          <div class="filemenu-list">
+            <button data-file="save">保存（.json）</button>
+            <button data-file="open">開く（.json）</button>
+            <button data-file="wav">WAV で書き出す</button>
+            <button data-file="midi">MIDI で書き出す</button>
+            <button data-file="new">新しく作る</button>
+            <p>作ったものは、このブラウザに自動で保存されています</p>
+          </div>
+        </details>
+        <input id="project-file" type="file" accept=".json,application/json" hidden>
       </div>
 
       <div class="daw-body">
@@ -131,10 +149,16 @@
       </div>
 
       <p class="hint">
-        クリック：置く／消す　ドラッグ：移動　右端をドラッグ：長さ　スペース：再生／停止　Ctrl＋Z：元に戻す　──　ほかの操作は説明パネルの「QOL」にまとめてあります
+        クリック：置く／消す　ドラッグ：移動　右端をドラッグ：長さ　スペース：再生／停止　Ctrl＋Z：元に戻す　A〜K：鍵盤（Z／X でオクターブ）　──　ほかの操作は説明パネルの「QOL」にまとめてあります
       </p>
     </section>
   </main>
+
+  <!-- スマホで開いたときのお知らせ -->
+  <div id="mobile-note" class="mobile-note" hidden>
+    <p><b>パソコンで開いてください</b><br>このアプリはマウスとキーボードで操作するので、スマホだとほぼ使えません</p>
+    <button id="mobile-ok">それでも見る</button>
+  </div>
 
   <!-- 用語の説明（マウスを乗せると出る） -->
   <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
@@ -157,5 +181,8 @@
   <script src="qol.js"></script>
   <script src="synth.js"></script>
   <script src="main.js"></script>
+  <script src="project.js"></script>
+  <script src="input.js"></script>
+  <script src="start.js"></script>
 </body>
 </html>
