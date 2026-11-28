@@ -42,7 +42,7 @@ function liveOff(id, pitch) {
   }
 }
 
-// 弾いている音を、ピアノロールの鍵盤で光らせる（liveKeys は main.js）
+// 弾いている音を、ピアノロールの鍵盤で光らせる（liveKeys は data.js）
 function showLiveKey(pitch, on) {
   on ? liveKeys.add(pitch) : liveKeys.delete(pitch);
   drawRoll();

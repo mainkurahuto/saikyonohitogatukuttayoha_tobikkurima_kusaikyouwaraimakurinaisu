@@ -41,7 +41,7 @@
         <button id="chart-btn" class="toc-btn">早見表</button>
         <button id="qol-btn" class="toc-btn">QOL</button>
       </div>
-      <!-- 目次・用語・本文（中身は lessons.js と glossary.js から main.js が作る） -->
+      <!-- 目次・用語・本文（中身は lessons.js と glossary.js から parser.js が作る） -->
       <div id="toc" class="toc" hidden></div>
       <div id="glossary" class="toc" hidden></div>
       <div id="chart" class="toc" hidden></div>
@@ -126,7 +126,7 @@
 
       <div class="daw-body">
         <div class="side">
-          <!-- トラック一覧（中身は main.js が作る） -->
+          <!-- トラック一覧（中身は render.js が作る） -->
           <div id="tracks" class="tracks"></div>
           <div class="add-track">
             <button id="add-inst">＋ 楽器</button>
@@ -180,7 +180,15 @@
   <script src="glossary.js"></script>
   <script src="qol.js"></script>
   <script src="synth.js"></script>
-  <script src="main.js"></script>
+  <!-- アプリの本体（この順番で読み込む。上のファイルで作ったものを、下のファイルが使う） -->
+  <script src="data.js"></script>
+  <script src="sound.js"></script>
+  <script src="edit.js"></script>
+  <script src="parser.js"></script>
+  <script src="chords.js"></script>
+  <script src="render.js"></script>
+  <script src="pianoroll.js"></script>
+  <script src="events.js"></script>
   <script src="project.js"></script>
   <script src="input.js"></script>
   <script src="start.js"></script>
