@@ -10,7 +10,7 @@ const currentNotes = () => state.tracks[state.current].notes;
 // 曲の中身（トラック・音・シンセ・音量など全部）を文字にして記録する。
 // 操作が終わるたび（クリック・ドラッグが終わった・選択欄を変えた…）に今の中身と比べて、
 // 変わっていたら、変わる前の中身を「元に戻す」の記録に足す
-const TRACK_KEYS = ["id", "name", "type", "role", "color", "mute", "solo", "volume", "pan", "send", "duck", "instrument", "synth", "notes", "custom"];
+const TRACK_KEYS = ["id", "name", "type", "role", "color", "mute", "solo", "volume", "pan", "send", "duck", "instrument", "synth", "pads", "sc", "notes", "custom"];
 function trackData(t) {
   const d = {};
   for (const k of TRACK_KEYS) if (t[k] !== undefined) d[k] = t[k];
@@ -56,7 +56,10 @@ function applySong(d) {
     const t = old.get(td.id) || {};
     old.delete(td.id);
     for (const k of TRACK_KEYS) delete t[k];
-    return Object.assign(t, newTrack({}), JSON.parse(JSON.stringify(td)));
+    Object.assign(t, newTrack({}), JSON.parse(JSON.stringify(td)));
+    if (t.type === "drum") fillDrumTrack(t);   // 古いデータでも、パッドの設定をそろえておく
+    else { delete t.pads; delete t.sc; }
+    return t;
   });
   for (const t of old.values()) disconnectBus(t);
   nextTrackId = Math.max(nextTrackId, ...state.tracks.map((t) => Number(String(t.id).slice(1)) + 1 || 0));

@@ -138,13 +138,15 @@
           <div id="pads" class="pads" hidden></div>
           <!-- コードパッド（メロディ以外の楽器トラックを選んでいるときだけ出る） -->
           <div id="chordpads" class="pads" hidden></div>
-          <input id="pad-file" type="file" accept="audio/*" hidden>
+          <input id="pad-file" type="file" accept="audio/*,.wav,.aif,.aiff,.flac,.ogg,.mp3" multiple hidden>
         </div>
         <!-- ピアノロール -->
         <div class="roll-wrap">
           <canvas id="roll"></canvas>
           <!-- シンセの編集画面（開いているときだけ、ピアノロールの上に重なる） -->
           <div id="synth" class="synth" hidden></div>
+          <!-- パッドの編集画面（ドラムトラックで「パッドを編集」を押したとき） -->
+          <div id="padedit" class="synth padedit" hidden></div>
         </div>
       </div>
 
@@ -153,6 +155,11 @@
       </p>
     </section>
   </main>
+
+  <!-- パッドの右クリックメニュー -->
+  <div id="pad-menu" class="pad-menu" hidden>
+    <button data-menu="load">Load</button><button data-menu="preview">Preview</button><button data-menu="clear">Clear</button><button data-menu="edit">編集</button>
+  </div>
 
   <!-- スマホで開いたときのお知らせ -->
   <div id="mobile-note" class="mobile-note" hidden>
@@ -189,6 +196,7 @@
   <script src="render.js"></script>
   <script src="pianoroll.js"></script>
   <script src="events.js"></script>
+  <script src="sampler.js"></script>
   <script src="project.js"></script>
   <script src="input.js"></script>
   <script src="start.js"></script>

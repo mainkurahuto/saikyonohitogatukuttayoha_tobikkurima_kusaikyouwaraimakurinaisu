@@ -14,12 +14,26 @@ function liveOn(id, pitch, velocity, padIndex) {
   audio.resume();
   const track = state.tracks[state.current];
   const now = audio.currentTime + 0.005;
-  if (isDrum(track)) { if (padIndex < DRUM_PADS.length) playDrum(track, padIndex, velocity, now); return; }
+  if (isDrum(track)) {
+    // ドラム：MIDI ノートとしてサンプラーに送る（パッド1 = 36。Pitch・Slice のパッドは鍵盤の範囲で鳴る）
+    if (pitch < 0 || pitch > 127) return;
+    const before = player.voices.length;
+    samplerNote(track, pitch, velocity, now, 30);
+    held.set(id, { voices: player.voices.slice(before), track, pitch });
+    if (scLearn) {   // サイドチェインの Learn 中
+      const sc = sidechainOf(track);
+      if (!sc.notes.includes(pitch)) sc.notes.push(pitch);
+      scLearn = false;
+      renderPadEdit();
+      commitSoon(0);
+    }
+    return;
+  }
   if (isFx(track)) { if (padIndex < FX_LIST.length) playFx(track, padIndex, velocity, now, BAR * unitSec()); return; }
   if (pitch < 0 || pitch > 127) return;
   const before = player.voices.length;
   playTrackNote(track, pitch, 0, velocity, now, 30);   // 30秒ぶん予約して、離したら止める
-  held.set(id, { voices: player.voices.slice(before), track });
+  held.set(id, { voices: player.voices.slice(before), track, pitch });
   showLiveKey(pitch, true);
 }
 
@@ -28,11 +42,13 @@ function liveOff(id, pitch) {
   const h = held.get(id);
   if (!h) return;
   held.delete(id);
-  showLiveKey(pitch, false);
+  showLiveKey(h.pitch, false);
   const t = h.track;
-  const rel = t.instrument === "synth" && t.synth ? Math.max(0.01, t.synth.env.r / 1000) : (INSTRUMENTS[t.instrument] || INSTRUMENTS.piano).release;
+  const relInst = t.instrument === "synth" && t.synth ? Math.max(0.01, t.synth.env.r / 1000) : (INSTRUMENTS[t.instrument] || INSTRUMENTS.piano).release;
   const now = audio.currentTime;
   for (const v of h.voices) {
+    if (v.oneShot) continue;   // ワンショットのパッドは、離しても最後まで鳴らす
+    const rel = v.rel || relInst;
     const g = v.g.gain;
     if (g.cancelAndHoldAtTime) g.cancelAndHoldAtTime(now);
     else { g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); }
@@ -61,12 +77,14 @@ window.addEventListener("keydown", (e) => {
   e.preventDefault();
   if (e.repeat) return;
   const step = KEY_TO_STEP[k];
-  liveOn("k" + e.code, (keyOctave + 1) * 12 + step, 100, step);
+  // ドラムは A = パッド1（ノート36）から。ほかは A = C4（ノート60）から
+  const base = isDrum(state.tracks[state.current]) ? (keyOctave - 1) * 12 : (keyOctave + 1) * 12;
+  liveOn("k" + e.code, base + step, 100, step);
 });
 window.addEventListener("keyup", (e) => {
   const k = e.key.toLowerCase();
   if (!(k in KEY_TO_STEP)) return;
-  liveOff("k" + e.code, (keyOctave + 1) * 12 + KEY_TO_STEP[k]);
+  liveOff("k" + e.code);
 });
 // ほかのウィンドウに移ったら、鳴りっぱなしにならないように全部離す
 window.addEventListener("blur", () => { for (const id of [...held.keys()]) liveOff(id); liveKeys.clear(); drawRoll(); });
@@ -76,7 +94,9 @@ let octaveTimer = null;
 function flashOctave() {
   const hint = document.querySelector(".hint");
   if (!hint.dataset.text) hint.dataset.text = hint.textContent;
-  hint.textContent = "キーボードの A = C" + keyOctave + "（Z：1オクターブ下　X：1オクターブ上）";
+  const drum = isDrum(state.tracks[state.current]);
+  const a = drum ? (keyOctave - 1) * 12 : (keyOctave + 1) * 12;
+  hint.textContent = "キーボードの A = " + NOTE_NAMES[0] + (Math.floor(a / 12) - 1) + "（ノート " + a + (drum ? "。ドラムはノート36がパッド1" : "") + "）　Z：1オクターブ下　X：1オクターブ上";
   clearTimeout(octaveTimer);
   octaveTimer = setTimeout(() => { hint.textContent = hint.dataset.text; }, 1500);
 }
@@ -86,8 +106,8 @@ let midiAccess = null;
 function onMidiMessage(e) {
   const [st, note, vel] = e.data;
   const type = st & 0xf0;
-  // ドラム・FX のトラックでは、GM のドラムの番号をパッドに合わせる（なければ C2 から順番）
-  const pad = GM_DRUMS.indexOf(note) >= 0 ? GM_DRUMS.indexOf(note) : ((note - 36) % 16 + 16) % 16;
+  // FX のトラックでは C2（36）から順番に効果音。ドラムはパッドのノートの決まりで鳴る
+  const pad = ((note - 36) % 16 + 16) % 16;
   if (type === 0x90 && vel > 0) liveOn("m" + note, note, vel, pad);
   else if (type === 0x80 || (type === 0x90 && vel === 0)) liveOff("m" + note, note);
 }

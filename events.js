@@ -231,15 +231,50 @@ $("pads").addEventListener("click", (e) => {
   if (pad) {
     state.pad = Number(pad.dataset.pad);
     preview(state.pad);
+    learnPad(track, state.pad);
+    if (e.detail === 2 && isDrum(track)) { state.padEdit = true; state.synthOpen = null; }   // ダブルクリックで編集画面
     render();
     return;
   }
   const btn = e.target.closest("button");
   if (!btn) return;
+  if (btn.dataset.action === "edit") { state.padEdit = !state.padEdit; state.synthOpen = null; render(); }
   if (btn.dataset.action === "load") $("pad-file").click();
-  if (btn.dataset.action === "reset") { pushHistory(); delete track.custom[state.pad]; preview(state.pad); render(); }
+  if (btn.dataset.action === "reset") clearPad(track, state.pad);
   if (btn.dataset.action === "pattern") insertDrumPattern(lastPattern);
 });
+// サイドチェインの Learn 中に鳴らしたパッドのノートを、合図のノートに足す
+function learnPad(track, i) {
+  if (!scLearn || !isDrum(track)) return;
+  const sc = sidechainOf(track), n = padParams(track, i).note;
+  if (!sc.notes.includes(n)) sc.notes.push(n);
+  scLearn = false;
+  commitSoon(0);
+}
+// パッドの右クリック：Load／Preview／Clear のメニュー
+$("pads").addEventListener("contextmenu", (e) => {
+  const pad = e.target.closest(".pad");
+  const track = state.tracks[state.current];
+  if (!pad || !isDrum(track)) return;
+  e.preventDefault();
+  state.pad = Number(pad.dataset.pad);
+  render();
+  const menu = $("pad-menu");
+  menu.hidden = false;
+  menu.style.left = e.clientX + "px";
+  menu.style.top = e.clientY + "px";
+});
+$("pad-menu").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  $("pad-menu").hidden = true;
+  if (!b) return;
+  const track = state.tracks[state.current];
+  if (b.dataset.menu === "load") $("pad-file").click();
+  if (b.dataset.menu === "preview") preview(state.pad);
+  if (b.dataset.menu === "clear") clearPad(track, state.pad);
+  if (b.dataset.menu === "edit") { state.padEdit = true; render(); }
+});
+document.addEventListener("pointerdown", (e) => { if (!e.target.closest("#pad-menu")) $("pad-menu").hidden = true; });
 $("pads").addEventListener("change", (e) => {
   if (e.target.id === "pattern") { lastPattern = Number(e.target.value); e.target.blur(); }
 });
@@ -286,23 +321,40 @@ $("chordpads").addEventListener("change", (e) => {
 
 // ---------- 外の音をパッドに読み込む ----------
 // 音声ファイルを AudioBuffer にして、選んだパッドに入れる
-async function loadPadFile(file, pad) {
+// quiet：◀ ▶ で切り替えたとき（エラーを出さない）
+async function loadPadFile(file, pad, quiet) {
   const track = state.tracks[state.current];
-  if (!isDrum(track) || !file) return;
+  if (!isDrum(track) || !file) return false;
   initAudio();
   try {
     const bytes = await file.arrayBuffer();
     const sid = await addSample(toBase64(bytes));
     commitHistory();   // 読み込む前の状態を区切っておく
     if (!track.custom) track.custom = {};
-    track.custom[pad] = { sid, name: file.name.replace(/\.[^.]+$/, "").slice(0, 20) };
+    const name = file.name.replace(/\.[^.]+$/, "");
+    track.custom[pad] = { sid, name: name.slice(0, 20) };
+    analyzePad(track, pad, name);   // スライスを自動で切る・BPM を見つける
     commitHistory();
     state.pad = pad;
     preview(pad);
     render();
+    return true;
   } catch (err) {
-    alert("この音声ファイルは読み込めませんでした。wav か mp3 を選んでください。");
+    if (!quiet) alert("「" + file.name + "」は読み込めませんでした。wav・mp3・ogg・flac などの音声ファイルを選んでください。");
+    return false;
   }
+}
+// 何個かまとめて：選んだパッドから順番に入れる。◀ ▶ 用に、名前順の一覧も覚えておく
+async function loadPadFiles(fileList, first) {
+  const track = state.tracks[state.current];
+  const files = [...fileList].filter((f) => f.type.startsWith("audio/") || /\.(wav|aiff?|flac|ogg|mp3|m4a)$/i.test(f.name));
+  if (!files.length) return;
+  const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name, "ja", { numeric: true }));
+  for (let k = 0; k < files.length && first + k < DRUM_PADS.length; k++) {
+    if (await loadPadFile(files[k], first + k)) padFileSets[track.id + ":" + (first + k)] = { files: sorted, index: sorted.indexOf(files[k]) };
+  }
+  state.pad = first;
+  render();
 }
 
 // パッドの上に音声ファイルをドラッグ＆ドロップしても読み込める
@@ -319,14 +371,14 @@ $("pads").addEventListener("drop", (e) => {
   if (!pad) return;
   e.preventDefault();
   pad.classList.remove("drop");
-  loadPadFile(e.dataTransfer.files[0], Number(pad.dataset.pad));
+  loadPadFiles(e.dataTransfer.files, Number(pad.dataset.pad));
 });
 
 // 自分の音（wav・mp3 など）を、選んだパッドに読み込む
 $("pad-file").addEventListener("change", async (e) => {
-  const file = e.target.files[0];
+  const files = [...e.target.files];
   e.target.value = "";   // 同じファイルをもう一度選んでも読み込めるように
-  loadPadFile(file, state.pad);
+  loadPadFiles(files, state.pad);
 });
 
 // キーボード操作

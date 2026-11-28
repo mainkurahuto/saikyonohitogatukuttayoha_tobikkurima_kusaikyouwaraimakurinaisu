@@ -174,10 +174,12 @@ async function exportWav(btn) {
   const off = new OfflineAudioContext(2, Math.ceil(length * sr), sr);
 
   // 今の音の行き先を取っておいて、入れかえる
-  const saved = { audio, master, reverbIn, buses, synthChains, voices: player.voices };
+  const saved = { audio, master, reverbIn, buses, synthChains, padChains, voiceLists, voices: player.voices };
   audio = off;
   buses = new WeakMap();
   synthChains = new WeakMap();
+  padChains = new WeakMap();
+  voiceLists = new WeakMap();
   player.voices = [];
   try {
     setupOutput();
@@ -191,7 +193,7 @@ async function exportWav(btn) {
     for (let u = 0; u < TOTAL; u++) scheduleUnit(u, lead + u * unitSec());
   } finally {
     // すぐ元に戻す（計算している間も、ほかの操作で音が鳴るように）
-    ({ audio, master, reverbIn, buses, synthChains } = saved);
+    ({ audio, master, reverbIn, buses, synthChains, padChains, voiceLists } = saved);
     player.voices = saved.voices;
   }
   if (btn) { btn.disabled = true; btn.textContent = "書き出し中…"; }
@@ -226,8 +228,8 @@ function encodeWav(buf) {
 }
 
 // ---------- MIDI に書き出す ----------
-// ドラムは 10ch（General MIDI のドラムの番号）。FX トラックは MIDI にできないので入れない
-const GM_DRUMS = [36, 38, 39, 42, 46, 49, 51, 45, 47, 50, 37, 56, 70, 54, 39, 35];   // パッドの番号 → GM の番号（スナップはクラップで代用）
+// ドラムは 10ch で、パッドのノート番号のまま（最初はパッド1 = 36 … パッド16 = 51。PadSampler にそのまま入る）。
+// FX トラックは MIDI にできないので入れない
 const GM_PROGRAMS = { piano: 0, organ: 16, strings: 48, lead: 81, pluck: 45, bell: 14, chip: 80 };
 function gmProgram(t) {
   if (t.instrument !== "synth" || !t.synth) return GM_PROGRAMS[t.instrument] || 0;
@@ -260,7 +262,7 @@ function exportMidi() {
     ev.push([0, [0xb0 | c, 7, Math.min(127, Math.round(t.volume * 1.27))], 0]);        // 音量
     ev.push([0, [0xb0 | c, 10, Math.round(((t.pan || 0) + 100) / 200 * 127)], 0]);     // パン
     for (const n of t.notes) {
-      const note = drum ? GM_DRUMS[n.pitch] : n.pitch;
+      const note = drum ? padParams(t, n.pitch).note : n.pitch;
       if (note === undefined) continue;
       const on = n.start * perUnit, off = (n.start + n.length) * perUnit;
       ev.push([on, [0x90 | c, note, Math.max(1, Math.min(127, n.velocity))], 1]);

@@ -100,16 +100,7 @@ function disconnectBus(track) {
   buses.delete(track);
 }
 
-// サイドチェイン：キックが鳴った瞬間だけ、duck が ON のトラックの音量を下げて、すぐ戻す
-function duckAt(time) {
-  for (const t of state.tracks) {
-    const b = t.duck && buses.get(t);
-    if (!b) continue;
-    b.duck.gain.setTargetAtTime(0.15, time, 0.004);
-    b.duck.gain.setTargetAtTime(1, time + 0.06, 0.07);
-  }
-}
-const KICK_PADS = [0, 15];   // キックと 808キック
+// サイドチェイン（duckAt）は sampler.js。どのノートで下げるかはドラムトラックごとに決める
 
 // トラックの音の大きさのメーター（毎フレーム、トラック一覧の棒の長さを変える）
 const meterLevels = new WeakMap();
@@ -300,10 +291,11 @@ function makeBuffer(dur, gen, hp, lp) {
 const SAMPLES = {};
 let nextSampleId = 1;
 const customSample = (track, pad) => (track.custom && track.custom[pad] && SAMPLES[track.custom[pad].sid]) || null;
-const padBuffer = (track, pad) => (customSample(track, pad) ? customSample(track, pad).buffer : DRUM_BUFFERS[pad]);
 const padName = (track, pad) => {
   if (isFx(track)) return FX_LIST[pad].name;
-  return customSample(track, pad) ? track.custom[pad].name : DRUM_PADS[pad].name;
+  if (customSample(track, pad)) return track.custom[pad].name;
+  const src = track.pads && track.pads[pad] ? track.pads[pad].src : pad;   // ◀ ▶ でほかの用意した音にしたとき
+  return (DRUM_PADS[src] || DRUM_PADS[pad]).name;
 };
 
 // ================================================
@@ -428,19 +420,7 @@ function playFx(track, i, velocity, time, durSec) {
   if (fx) fx.play(track, velocity, time, Math.max(0.1, durSec));
 }
 
-// パッドを1回鳴らす
-function playDrum(track, pad, velocity, time) {
-  const buf = padBuffer(track, pad);
-  if (!buf) return;
-  const src = audio.createBufferSource();
-  src.buffer = buf;
-  const g = audio.createGain();
-  g.gain.value = 0.9 * (velocity / 127);
-  src.connect(g).connect(busFor(track));
-  src.start(time);
-  player.voices.push({ g, oscs: [src], end: time + buf.duration });
-  if (KICK_PADS.includes(pad)) duckAt(time);
-}
+// パッドを鳴らす（playDrum・playPad）は sampler.js
 
 // リズムの型（1小節分）。[パッドの番号, 位置（48分単位）] の並び。1拍 = 12、8分 = 6、16分 = 3
 const BEATS = [];
@@ -479,8 +459,13 @@ function preview(pitch) {
 
 // 楽器トラックの1音（音色が「シンセ」なら自分で作った音、それ以外は用意した音色）
 function playTrackNote(track, pitch, lengthUnits, velocity, time, durSec) {
-  if (track.instrument === "synth" && track.synth) playSynth(track, pitch, lengthUnits, velocity, time, durSec);
-  else playNote(pitch, lengthUnits, velocity, time, durSec, track.instrument, busFor(track));
+  if (track.instrument === "synth" && track.synth) { playSynth(track, pitch, lengthUnits, velocity, time, durSec); return; }
+  // 「サンプラー：ドラムの名前」：そのドラムトラックのパッドを、MIDI ノートとして鳴らす（Pitch・Slice のパッド向け）
+  if (String(track.instrument).startsWith("pads:")) {
+    const dt = state.tracks.find((t) => t.id === track.instrument.slice(5) && isDrum(t));
+    if (dt) { samplerNote(dt, pitch, velocity, time, durSec !== undefined ? durSec : lengthUnits * unitSec()); return; }
+  }
+  playNote(pitch, lengthUnits, velocity, time, durSec, track.instrument, busFor(track));
 }
 
 // ループする範囲（48分単位）
@@ -493,7 +478,7 @@ function scheduleUnit(unit, t) {
     if (!isAudible(track)) continue;
     for (const n of track.notes) {
       if (n.start !== unit) continue;
-      if (isDrum(track)) playDrum(track, n.pitch, n.velocity, t);
+      if (isDrum(track)) playDrum(track, n.pitch, n.velocity, t, n.length * unitSec());
       else if (isFx(track)) playFx(track, n.pitch, n.velocity, t, n.length * unitSec());
       else playTrackNote(track, n.pitch, n.length, n.velocity, t);
     }

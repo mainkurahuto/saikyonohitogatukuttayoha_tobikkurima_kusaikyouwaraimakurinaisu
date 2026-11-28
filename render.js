@@ -17,6 +17,7 @@ function render() {
   renderPads();
   renderChordPads();
   renderSynth();
+  renderPadEdit();
   renderHlSelect();
   drawRoll();
 }
@@ -43,6 +44,12 @@ function renderTracks() {
         options += '<option value="' + key + '"' + (key === t.instrument ? " selected" : "") + ">" + INSTRUMENTS[key].name + "</option>";
       }
       options += '<option value="synth"' + (t.instrument === "synth" ? " selected" : "") + ">シンセ（自分で作る）</option>";
+      // ドラムトラックのパッドを、ノートで鳴らす（Pitch・Slice にしたパッドを、ピアノロールで弾く）
+      for (const d of state.tracks) {
+        if (!isDrum(d)) continue;
+        const v = "pads:" + d.id;
+        options += '<option value="' + v + '"' + (t.instrument === v ? " selected" : "") + ">サンプラー：" + esc(d.name) + "</option>";
+      }
       kind = '<select class="inst" data-action="inst" aria-label="' + name + 'の音色">' + options + "</select>";
       if (t.instrument === "synth") kind += '<button class="open-synth" data-action="synth">シンセを開く</button>';
     }
@@ -106,16 +113,21 @@ function renderPads() {
     box.innerHTML = h;
     return;
   }
-  let html = '<p class="pads-title">パッド<span>クリックで鳴る・音声ファイルをドロップで差し替え</span></p><div class="pad-grid">';
-  DRUM_PADS.forEach((p, i) => {
+  let html = '<p class="pads-title">パッド<span>クリックで鳴る・ダブルクリックで編集・右クリックでメニュー・音声ファイルをドロップで差し替え（何個でも）</span></p><div class="pad-grid">';
+  DRUM_PADS.forEach((_, i) => {
     const custom = customSample(track, i);
-    html += '<button class="pad' + (i === state.pad ? " selected" : "") + (custom ? " custom" : "") + '" data-pad="' + i + '" title="' + esc(padName(track, i)) + '">' + esc(padName(track, i)) + "</button>";
+    const p = padParams(track, i);
+    // パッドの下の小さい印：CHOKE 1・PITCH・SLICE など
+    const tags = [p.choke !== "0" ? "CHOKE " + p.choke : "", p.mode !== "drum" ? p.mode.toUpperCase() : "", p.reverse ? "REV" : ""].filter(Boolean).join(" ");
+    html += '<button class="pad' + (i === state.pad ? " selected" : "") + (custom ? " custom" : "") + '" data-pad="' + i + '" title="' + esc(padName(track, i)) + "（ノート " + p.note + '）">' +
+      esc(padName(track, i)) + (tags ? '<small class="pad-tag">' + tags + "</small>" : "") + "</button>";
   });
   html += "</div>";
   const custom = customSample(track, state.pad);
   html +=
     '<div class="pad-load">' +
       '<p>選んだパッド：<b>' + esc(padName(track, state.pad)) + "</b></p>" +
+      '<button data-action="edit"' + (state.padEdit ? ' class="active"' : "") + ">パッドを編集</button>" +
       '<button data-action="load">自分の音を読み込む</button>' +
       (custom ? '<button data-action="reset">元の音に戻す</button>' : "") +
     "</div>" +
