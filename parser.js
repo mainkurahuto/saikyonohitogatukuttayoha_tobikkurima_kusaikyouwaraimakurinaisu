@@ -609,8 +609,8 @@ function glossaryHtml() {
 
 // マウスを乗せたとき（キーボードで選んだとき）に出る説明
 const tip = $("tooltip");
-function showTip(el) {
-  const g = GLOSSARY[Number(el.dataset.term)];
+function showTip(el, index) {
+  const g = GLOSSARY[index !== undefined ? index : Number(el.dataset.term)];
   tip.innerHTML = "<strong>" + inline(g.names.join("／")) + "</strong><br>" + inline(g.text);
   tip.hidden = false;
   // 言葉のすぐ下に出す。画面からはみ出すなら左や上にずらす
@@ -624,10 +624,73 @@ function showTip(el) {
 }
 function hideTip() { tip.hidden = true; }
 
+// ---------- 作曲画面でも、用語の説明を出す（右上の「用語ヒント」で ON／OFF） ----------
+// ボタン・つまみ・見出しの文字に登録した言葉があれば、マウスを乗せたときに説明を出す
+// 英語のつまみの名前は、日本語の言葉に読みかえて探す
+const DAW_ALIAS = {
+  PITCH: "ピッチ", FINE: "セント", UNISON: "ユニゾン", DETUNE: "デチューン", PAN: "パン", LEVEL: "音量",
+  OSC: "オシレーター", NOISE: "ノイズ", ENVELOPE: "エンベロープ", WOBBLE: "ウォブル", EFFECTS: "エフェクト",
+  CHORUS: "コーラス", COMPRESSOR: "コンプ", DELAY: "ディレイ", DISTORTION: "ディストーション", FILTER: "フィルター",
+  FLANGER: "フランジャー", PHASER: "フェイザー", REVERB: "リバーブ", DRIVE: "ディストーション", CUTOFF: "カットオフ",
+  "SIDECHAIN OUT": "サイドチェイン", "TEMPO SYNC": "タイムストレッチ", "PLAY MODE": "サンプラー", SAMPLE: "サンプル",
+  SLICE: "スライス", "AUTO SLICE": "スライス", "SPLIT EVENLY": "スライス", REPITCH: "ピッチ", "SAMPLE BPM": "BPM",
+  M: "ミュート", S: "ソロ", "キックで下げる": "サイドチェイン", "響き": "センド", "強さ": "ベロシティ", "シンセを開く": "シンセ",
+  "リズムの型": "四つ打ち", "メトロノーム": "メトロノーム", "MIDI 鍵盤": "MIDI キーボード"
+};
+let dawHints = true;
+try { dawHints = localStorage.getItem("zero8-daw-hints") !== "off"; } catch (err) { /* 保存できなくても ON のまま */ }
+function termForControl(el) {
+  let text = "";
+  if (el.classList.contains("knob")) text = el.querySelector(".knob-label").textContent;
+  else if (el.matches("label")) {   // 「グリッド <select>」のような所は、中の選択欄の文字を除いた言葉だけ
+    const span = el.querySelector(":scope > span");
+    text = span ? span.textContent : [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("");
+  }
+  else text = el.textContent;
+  text = text.replace(/[：:（(].*$/, "").replace(/[▶◀■＋+]/g, "").trim();
+  if (!text || text.length > 24) return null;
+  const alias = DAW_ALIAS[text.toUpperCase()] || DAW_ALIAS[text];
+  if (alias && TERM_INDEX[alias] !== undefined) return TERM_INDEX[alias];
+  if (TERM_INDEX[text] !== undefined) return TERM_INDEX[text];
+  // 大文字・小文字の違いを気にしない（「Attack」→「アタック|Attack」など）
+  const key = Object.keys(TERM_INDEX).find((k) => k.toLowerCase() === text.toLowerCase());
+  if (key) return TERM_INDEX[key];
+  TERM_REGEX.lastIndex = 0;
+  const m = TERM_REGEX && TERM_REGEX.exec(text);
+  return m ? TERM_INDEX[m[0]] : null;
+}
+let dawTipTimer = null, dawTipEl = null;
 document.addEventListener("mouseover", (e) => {
   const el = e.target.closest(".term");
-  el ? showTip(el) : hideTip();
+  clearTimeout(dawTipTimer);
+  if (el) { showTip(el); return; }
+  const ctl = dawHints && e.target.closest("#daw") && e.target.closest(".knob, button, label, .syn-title b, .pads-title, .syn-h, .kind, .pad");
+  if (ctl && ctl.closest("#daw")) {
+    if (ctl === dawTipEl && !tip.hidden) return;
+    const idx = TERM_REGEX ? termForControl(ctl) : null;
+    if (idx !== null && idx !== undefined) {
+      dawTipEl = ctl;
+      dawTipTimer = setTimeout(() => showTip(ctl, idx), 350);   // 少し止まったら出す（通りすぎただけでは出さない）
+      return;
+    }
+  }
+  dawTipEl = null;
+  hideTip();
 });
+$("hint-toggle").addEventListener("click", (e) => {
+  dawHints = !dawHints;
+  try { localStorage.setItem("zero8-daw-hints", dawHints ? "on" : "off"); } catch (err) { /* 保存できなくても切り替えはできる */ }
+  renderHintToggle();
+  e.target.blur();
+});
+function renderHintToggle() {
+  const b = $("hint-toggle");
+  b.textContent = "用語ヒント：" + (dawHints ? "ON" : "OFF");
+  b.classList.toggle("active", dawHints);
+  b.setAttribute("aria-pressed", dawHints);
+}
+renderHintToggle();
+document.addEventListener("pointerdown", () => { clearTimeout(dawTipTimer); if (dawTipEl) hideTip(); });
 document.addEventListener("focusin", (e) => { if (e.target.classList.contains("term")) showTip(e.target); });
 document.addEventListener("focusout", hideTip);
 $("lesson").addEventListener("scroll", hideTip);
