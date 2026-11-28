@@ -115,7 +115,7 @@ $("bpm").addEventListener("change", (e) => {
   } else {
     state.bpm = bpm;
   }
-  if (audio) for (const t of state.tracks) { if (t.synth && synthChains.has(t)) chainFor(t).update(t.synth); }   // ディレイの間隔・ウォブルの速さもテンポに合わせる
+  if (audio) for (const t of state.tracks) { if (t.synth && synthChains.has(t)) chainFor(t).update(t.synth); updateBus(t); }   // ディレイの間隔・ウォブルの速さもテンポに合わせる
 });
 
 // トラック一覧：ボタンが毎回作り直されるので、外側の箱で1回だけ受け取る
@@ -135,7 +135,7 @@ $("tracks").addEventListener("click", (e) => {
     renderTracks();
     return;
   }
-  if (action === "synth") { state.synthOpen = state.synthOpen === i ? null : i; if (state.current !== i) selectTrack(i); else render(); return; }
+  if (action === "synth") { state.fxEdit = null; state.synthOpen = state.synthOpen === i ? null : i; if (state.current !== i) selectTrack(i); else render(); return; }
   if (action === "select") {
     // 2回続けて押したら名前を変える（1回目で一覧が作り直されるので、dblclick ではなく回数で見る）
     if (e.detail === 2) {
@@ -155,6 +155,7 @@ $("tracks").addEventListener("click", (e) => {
   if (action === "up") { moveTrack(i, -1); return; }
   if (action === "down") { moveTrack(i, 1); return; }
   if (action === "dup") { duplicateTrack(i); return; }
+  if (action === "fx") { state.fxEdit = state.fxEdit === t.id ? null : t.id; state.synthOpen = null; state.padEdit = false; render(); return; }
   render();
 });
 
@@ -232,13 +233,13 @@ $("pads").addEventListener("click", (e) => {
     state.pad = Number(pad.dataset.pad);
     preview(state.pad);
     learnPad(track, state.pad);
-    if (e.detail === 2 && isDrum(track)) { state.padEdit = true; state.synthOpen = null; }   // ダブルクリックで編集画面
+    if (e.detail === 2 && isDrum(track)) { state.padEdit = true; state.synthOpen = null; state.fxEdit = null; }   // ダブルクリックで編集画面
     render();
     return;
   }
   const btn = e.target.closest("button");
   if (!btn) return;
-  if (btn.dataset.action === "edit") { state.padEdit = !state.padEdit; state.synthOpen = null; render(); }
+  if (btn.dataset.action === "edit") { state.padEdit = !state.padEdit; state.synthOpen = null; state.fxEdit = null; render(); }
   if (btn.dataset.action === "load") $("pad-file").click();
   if (btn.dataset.action === "reset") clearPad(track, state.pad);
   if (btn.dataset.action === "pattern") insertDrumPattern(lastPattern);

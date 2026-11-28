@@ -4,6 +4,7 @@
 initSynthUI();
 initSynthViews();
 initPadEdit();
+initFxEdit();
 $("book-arrange").disabled = !BOOKS.arrange.steps.length;
 renderLoopSelects();
 loadAutosave();      // 前に作っていたものがあれば戻す

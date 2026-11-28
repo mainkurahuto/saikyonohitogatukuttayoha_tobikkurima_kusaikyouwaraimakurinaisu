@@ -18,6 +18,7 @@ function render() {
   renderChordPads();
   renderSynth();
   renderPadEdit();
+  renderFxEdit();
   renderHlSelect();
   drawRoll();
 }
@@ -89,6 +90,9 @@ function trackToolsHtml(t, i, name) {
       '<label class="vol"><span>BTP</span><input type="range" class="vol-range" data-prop="btp" min="0" max="100" value="' + (t.btp || 0) + '" aria-label="' + name + 'の BTP" title="BTP（OTT のパクリ）の Depth。25 くらいで適当に入れるだけでだいぶ変わる"><output>' + (t.btp || 0) + "</output></label>" +
       '<div class="tool-row">' +
         '<button class="ms duck' + (t.duck ? " duck-on" : "") + '" data-action="duck" aria-pressed="' + !!t.duck + '" title="サイドチェイン：キックが鳴った瞬間だけ、このトラックの音量を下げる">' + (t.duck ? "キックで下げる：ON" : "キックで下げる：OFF") + "</button>" +
+      "</div>" +
+      '<div class="tool-row">' +
+        '<button class="ms fx-open' + (state.fxEdit === t.id ? " active" : "") + '" data-action="fx" title="このトラックにエフェクトを入れる">エフェクト' + ((t.inserts || []).length ? "（" + t.inserts.length + "）" : "") + "</button>" +
       "</div>" +
       '<div class="tool-row">' +
         '<button class="ms" data-action="up" aria-label="' + name + 'を上へ"' + (i === 0 ? " disabled" : "") + ">↑</button>" +

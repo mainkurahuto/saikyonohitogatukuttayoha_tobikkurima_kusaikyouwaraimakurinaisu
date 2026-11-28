@@ -67,7 +67,7 @@ const volToGain = (v) => v / 80;   // 音量 80 で、そのままの大きさ
 function busFor(track) {
   let b = buses.get(track);
   if (!b) {
-    b = { in: audio.createGain(), duck: audio.createGain(), pan: audio.createStereoPanner(), send: audio.createGain(), meter: audio.createAnalyser() };
+    b = { pre: audio.createGain(), in: audio.createGain(), duck: audio.createGain(), pan: audio.createStereoPanner(), send: audio.createGain(), meter: audio.createAnalyser() };
     b.in.gain.value = volToGain(track.volume);
     b.pan.pan.value = (track.pan || 0) / 100;
     b.send.gain.value = (track.send || 0) / 100;
@@ -76,10 +76,11 @@ function busFor(track) {
     b.in.connect(b.dry).connect(b.duck).connect(b.pan).connect(master);
     b.pan.connect(b.send).connect(reverbIn);
     b.pan.connect(b.meter);
+    b.pre.connect(b.in);   // トラックに入れたエフェクトは、この間に入る（inserts.js）
     buses.set(track, b);
-    if (track.btp > 0) updateBus(track);
+    updateBus(track);
   }
-  return b.in;
+  return b.pre;
 }
 // 音量・パン・リバーブの値を、音に反映する
 function updateBus(track) {
@@ -101,6 +102,7 @@ function updateBus(track) {
   }
   b.dry.gain.setTargetAtTime(1 - depth, t, 0.02);
   if (b.wet) b.wet.gain.setTargetAtTime(depth, t, 0.02);
+  syncInserts(track, b);   // トラックに入れたエフェクト
 }
 function setVolume(track, v) {
   track.volume = v;
@@ -110,6 +112,7 @@ function setVolume(track, v) {
 function disconnectBus(track) {
   const b = audio && buses.get(track);
   if (!b) return;
+  b.pre.disconnect();
   b.in.disconnect();
   b.pan.disconnect();
   buses.delete(track);

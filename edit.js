@@ -10,7 +10,7 @@ const currentNotes = () => state.tracks[state.current].notes;
 // 曲の中身（トラック・音・シンセ・音量など全部）を文字にして記録する。
 // 操作が終わるたび（クリック・ドラッグが終わった・選択欄を変えた…）に今の中身と比べて、
 // 変わっていたら、変わる前の中身を「元に戻す」の記録に足す
-const TRACK_KEYS = ["id", "name", "type", "role", "color", "mute", "solo", "volume", "pan", "send", "btp", "duck", "instrument", "synth", "pads", "sc", "notes", "custom"];
+const TRACK_KEYS = ["id", "name", "type", "role", "color", "mute", "solo", "volume", "pan", "send", "btp", "duck", "instrument", "inserts", "synth", "pads", "sc", "notes", "custom"];
 function trackData(t) {
   const d = {};
   for (const k of TRACK_KEYS) if (t[k] !== undefined) d[k] = t[k];

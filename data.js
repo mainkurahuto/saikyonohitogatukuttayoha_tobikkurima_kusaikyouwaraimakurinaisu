@@ -42,6 +42,7 @@ const state = {
   selected: new Set(),  // 選択中の音（編集中のトラックの音そのもの）
   metronome: false,     // メトロノームを鳴らすか
   padEdit: false,       // パッドの編集画面を開いているか
+  fxEdit: null,         // エフェクトの画面を開いているトラックの id（閉じていれば null）
   loop: [0, 8]          // ループする範囲（小節。[0, 8] = 1〜8小節目の全部）
 };
 
@@ -55,7 +56,7 @@ function firstTracks() {
 // トラックを1つ作る（書かなかった所は、最初の値）
 function newTrack(props) {
   const t = Object.assign({ id: "t" + (nextTrackId++), name: "楽器", type: "inst", color: "#e86f6f", mute: false, solo: false,
-                            volume: 80, pan: 0, send: 0, btp: 0, duck: false, instrument: "piano", notes: [], custom: {} }, props);
+                            volume: 80, pan: 0, send: 0, btp: 0, duck: false, instrument: "piano", inserts: [], notes: [], custom: {} }, props);
   if (t.type === "drum") fillDrumTrack(t);   // ドラム：パッド16個の設定（sampler.js）
   return t;
 }
