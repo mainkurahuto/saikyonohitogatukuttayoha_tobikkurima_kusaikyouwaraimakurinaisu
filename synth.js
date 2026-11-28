@@ -7,10 +7,10 @@
 const WAVES = { sine: "サイン", triangle: "三角", sawtooth: "ノコギリ", square: "矩形" };
 const WOBBLE_RATES = { "1/2": 2, "1/4": 1, "1/8": 0.5, "1/8T": 1 / 3, "1/16": 0.25 };   // 何拍で1回揺れるか
 const DELAY_TIMES = { "1/16": 0.25, "1/8": 0.5, "付点1/8": 0.75, "1/4": 1 };              // 何拍あとに返ってくるか
-const FX_ORDER = ["chorus", "compressor", "delay", "distortion", "eq", "filter", "flanger", "phaser", "reverb"];
+const FX_ORDER = ["chorus", "compressor", "delay", "distortion", "eq", "filter", "flanger", "phaser", "reverb", "btp"];
 const FX_NAMES = {
   chorus: "Chorus", compressor: "Compressor", delay: "Delay", distortion: "Distortion", eq: "EQ",
-  filter: "Filter", flanger: "Flanger", phaser: "Phaser", reverb: "Reverb"
+  filter: "Filter", flanger: "Flanger", phaser: "Phaser", reverb: "Reverb", btp: "BTP（Beyond The Peak）"
 };
 
 // 新しいシンセの最初の設定（ノコギリ波1つだけ）
@@ -32,7 +32,8 @@ function defaultSynth() {
       filter:     { on: false, type: "lowpass", cutoff: 70, reso: 20 },
       flanger:    { on: false, depth: 50, rate: 30, mix: 50 },
       phaser:     { on: false, depth: 60, rate: 30, mix: 50 },
-      reverb:     { on: false, size: 50, mix: 30 }
+      reverb:     { on: false, size: 50, mix: 30 },
+      btp:        { on: false, depth: 25, down: 100, up: 100, time: 25, out: 0 }   // OTT のパクリ
     }
   };
 }
@@ -240,6 +241,11 @@ function makeChain(track) {
     ch.phaserLfo.o.start();
     return node;
   });
+  B.btp = fxBox((input) => {   // OTT のパクリ（btp.js）
+    ch.btp = makeBTP();
+    input.connect(ch.btp.input);
+    return ch.btp.output;
+  });
   B.reverb = fxBox((input) => {
     const cv = audio.createConvolver();
     input.connect(cv);
@@ -263,7 +269,13 @@ function makeChain(track) {
 }
 
 // 設定の数字を、音の部品に反映する
+// 前に作ったシンセ（BTP がなかったころ）にも、足りない設定を足す
+function fillSynth(p) {
+  const d = defaultSynth();
+  for (const k in d.fx) if (!p.fx[k]) p.fx[k] = d.fx[k];
+}
 function updateChain(ch, p, force) {
+  fillSynth(p);
   const t = audio.currentTime;
   const set = (param, v) => param.setTargetAtTime(v, t, 0.02);
   const fx = p.fx;
@@ -317,6 +329,9 @@ function updateChain(ch, p, force) {
   B.phaser.mix(fx.phaser.on, fx.phaser.mix / 100);
   set(ch.phaserLfo.o.frequency, 0.05 + (fx.phaser.rate / 100) * 3);
   set(ch.phaserLfo.g.gain, (fx.phaser.depth / 100) * 800);
+
+  B.btp.mix(fx.btp.on, fx.btp.depth / 100);
+  ch.btp.update({ down: fx.btp.down, up: fx.btp.up, time: fx.btp.time, inGain: 0, outGain: fx.btp.out });
 
   B.reverb.mix(fx.reverb.on, fx.reverb.mix / 100);
   if (force || ch.reverbSize !== fx.reverb.size) {   // 響きを作り直すのは、広さが変わったときだけ
@@ -423,7 +438,8 @@ const FX_KNOBS = {
   filter:     [["種類", "type", { lowpass: "ローパス（高い音を削る）", highpass: "ハイパス（低い音を削る）" }], ["カットオフ", "cutoff", 0, 100], ["レゾナンス", "reso", 0, 100]],
   flanger:    [["深さ", "depth", 0, 100], ["速さ", "rate", 0, 100], ["混ぜる量", "mix", 0, 100]],
   phaser:     [["深さ", "depth", 0, 100], ["速さ", "rate", 0, 100], ["混ぜる量", "mix", 0, 100]],
-  reverb:     [["広さ", "size", 0, 100], ["混ぜる量", "mix", 0, 100]]
+  reverb:     [["広さ", "size", 0, 100], ["混ぜる量", "mix", 0, 100]],
+  btp:        [["Depth", "depth", 0, 100, "%"], ["Down", "down", 0, 100, "%"], ["Up", "up", 0, 100, "%"], ["Time", "time", 0, 100], ["Out", "out", -12, 12, "dB"]]
 };
 
 // つまみか選択欄の HTML。path は設定の場所（"osc.0.pitch" など）
@@ -497,6 +513,7 @@ function renderSynth() {
   if (state.synthOpen === null || !track || track.instrument !== "synth") { box.hidden = true; state.synthOpen = null; return; }
   box.hidden = false;
   const p = track.synth;
+  fillSynth(p);
   let html = '<div class="syn-head"><b>シンセ：' + esc(track.name) + "</b>" +
     '<label class="sel-row"><span>プリセット</span><select data-preset="1">' +
     Object.keys(SYNTH_PRESETS).map((k) => '<option value="' + k + '"' + (k === p.preset ? " selected" : "") + ">" + SYNTH_PRESETS[k].name + "</option>").join("") +

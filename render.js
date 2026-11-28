@@ -86,6 +86,7 @@ function trackToolsHtml(t, i, name) {
   return '<div class="track-tools">' +
       '<label class="vol"><span>パン</span><input type="range" class="vol-range" data-prop="pan" min="-100" max="100" value="' + pan + '" aria-label="' + name + 'の左右" title="ダブルクリックで真ん中"><output>' + panText + "</output></label>" +
       '<label class="vol"><span>響き</span><input type="range" class="vol-range" data-prop="send" min="0" max="100" value="' + (t.send || 0) + '" aria-label="' + name + 'のリバーブ" title="みんなで使うリバーブに送る量"><output>' + (t.send || 0) + "</output></label>" +
+      '<label class="vol"><span>BTP</span><input type="range" class="vol-range" data-prop="btp" min="0" max="100" value="' + (t.btp || 0) + '" aria-label="' + name + 'の BTP" title="BTP（OTT のパクリ）の Depth。25 くらいで適当に入れるだけでだいぶ変わる"><output>' + (t.btp || 0) + "</output></label>" +
       '<div class="tool-row">' +
         '<button class="ms duck' + (t.duck ? " duck-on" : "") + '" data-action="duck" aria-pressed="' + !!t.duck + '" title="サイドチェイン：キックが鳴った瞬間だけ、このトラックの音量を下げる">' + (t.duck ? "キックで下げる：ON" : "キックで下げる：OFF") + "</button>" +
       "</div>" +

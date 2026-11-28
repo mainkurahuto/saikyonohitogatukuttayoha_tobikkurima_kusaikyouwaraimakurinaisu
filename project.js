@@ -172,6 +172,7 @@ async function exportWav(btn) {
   const length = lead + TOTAL * unitSec() + tail;
   const sr = 44100;
   const off = new OfflineAudioContext(2, Math.ceil(length * sr), sr);
+  await loadBtp(off);   // BTP の音の処理は、書き出し用の箱にも読み込む
 
   // 今の音の行き先を取っておいて、入れかえる
   const saved = { audio, master, reverbIn, buses, synthChains, padChains, voiceLists, voices: player.voices };

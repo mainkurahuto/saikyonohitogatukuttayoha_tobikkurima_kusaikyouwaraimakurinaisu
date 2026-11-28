@@ -22,6 +22,7 @@ function initAudio() {
 function openAudio() {
   if (audio) return;
   audio = new AudioContext();
+  loadBtp(audio);   // BTP の音の処理を読み込んでおく（btp.js）
   setupOutput();
   requestAnimationFrame(drawMeters);
 }
@@ -71,10 +72,12 @@ function busFor(track) {
     b.pan.pan.value = (track.pan || 0) / 100;
     b.send.gain.value = (track.send || 0) / 100;
     b.meter.fftSize = 512;
-    b.in.connect(b.duck).connect(b.pan).connect(master);
+    b.dry = audio.createGain();   // BTP を通らない音（BTP の Depth が上がるほど小さく）
+    b.in.connect(b.dry).connect(b.duck).connect(b.pan).connect(master);
     b.pan.connect(b.send).connect(reverbIn);
     b.pan.connect(b.meter);
     buses.set(track, b);
+    if (track.btp > 0) updateBus(track);
   }
   return b.in;
 }
@@ -86,6 +89,18 @@ function updateBus(track) {
   b.in.gain.setTargetAtTime(volToGain(track.volume), t, 0.02);
   b.pan.pan.setTargetAtTime((track.pan || 0) / 100, t, 0.02);
   b.send.gain.setTargetAtTime((track.send || 0) / 100, t, 0.02);
+  // BTP（OTT のパクリ）：Depth が 0 より大きくなったら作って、元の音と混ぜる
+  const depth = (track.btp || 0) / 100;
+  if (depth > 0 && !b.btp) {
+    b.btp = makeBTP();
+    b.btp.update(TRACK_BTP);
+    b.wet = audio.createGain();
+    b.wet.gain.value = 0;
+    b.in.connect(b.btp.input);
+    b.btp.output.connect(b.wet).connect(b.duck);
+  }
+  b.dry.gain.setTargetAtTime(1 - depth, t, 0.02);
+  if (b.wet) b.wet.gain.setTargetAtTime(depth, t, 0.02);
 }
 function setVolume(track, v) {
   track.volume = v;
